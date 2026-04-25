@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../models/measurement_point.dart';
@@ -16,6 +17,7 @@ class MeasurementProvider extends ChangeNotifier {
   String? _exportError;
 
   StreamSubscription<String>? _dataSub;
+  Timer? _demoTimer;
 
   VoltammetryMode? get selectedMode => _selectedMode;
   Map<String, double> get parameters => Map.unmodifiable(_parameters);
@@ -26,10 +28,8 @@ class MeasurementProvider extends ChangeNotifier {
 
   void selectMode(VoltammetryMode mode) {
     _selectedMode = mode;
-    // Reset to defaults for the chosen mode
     _parameters = {
-      for (final p in modeParameters[mode]!)
-        p.key: p.defaultValue,
+      for (final p in modeParameters[mode]!) p.key: p.defaultValue,
     };
     notifyListeners();
   }
@@ -50,17 +50,20 @@ class MeasurementProvider extends ChangeNotifier {
     _exportError = null;
     notifyListeners();
 
-    _dataSub?.cancel();
-    _dataSub = BleService().dataStream.listen(_onData);
+    if (BleService().isConnected) {
+      _dataSub?.cancel();
+      _dataSub = BleService().dataStream.listen(_onData);
+    } else {
+      _startDemoSimulation();
+    }
   }
+
+  // ── BLE data handler ───────────────────────────────────────────────────────
 
   void _onData(String raw) {
     if (_state != MeasurementState.running) return;
-
-    // Parse format "x,y" from BLE. Falls back to index-based if only one value.
     final parts = raw.split(',');
     double? x, y;
-
     if (parts.length >= 2) {
       x = double.tryParse(parts[0].trim());
       y = double.tryParse(parts[1].trim());
@@ -68,14 +71,98 @@ class MeasurementProvider extends ChangeNotifier {
       y = double.tryParse(parts[0].trim());
       x = _session!.points.length.toDouble();
     }
-
     if (x != null && y != null) {
       _session!.points.add(MeasurementPoint(x, y));
       notifyListeners();
     }
   }
 
+  // ── Demo simulation ────────────────────────────────────────────────────────
+
+  void _startDemoSimulation() {
+    final pts = _generateDemoPoints();
+    int i = 0;
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 40), (timer) {
+      if (_state != MeasurementState.running || i >= pts.length) {
+        timer.cancel();
+        if (_state == MeasurementState.running) {
+          _state = MeasurementState.done;
+          notifyListeners();
+        }
+        return;
+      }
+      _session!.points.add(pts[i]);
+      i++;
+      notifyListeners();
+    });
+  }
+
+  List<MeasurementPoint> _generateDemoPoints() {
+    switch (_selectedMode) {
+      case VoltammetryMode.cv:
+        return _cvPoints();
+      case VoltammetryMode.ca:
+        return _caPoints();
+      case VoltammetryMode.swv:
+      case VoltammetryMode.dpv:
+      case VoltammetryMode.npv:
+        return _pulsePoints();
+      case null:
+        return [];
+    }
+  }
+
+  /// Cyclic voltammetry — duck-shaped curve with oxidation + reduction peaks.
+  List<MeasurementPoint> _cvPoints() {
+    final pts = <MeasurementPoint>[];
+    const step = 5.0;
+
+    // Forward sweep: -500 mV → +500 mV
+    for (double e = -500; e <= 500; e += step) {
+      final baseline = 0.08;
+      final oxPeak =
+          5.2 * math.exp(-math.pow(e - 210, 2) / (2 * math.pow(55, 2)));
+      pts.add(MeasurementPoint(e, baseline + oxPeak));
+    }
+
+    // Reverse sweep: +500 mV → -500 mV
+    for (double e = 500; e >= -500; e -= step) {
+      final baseline = -0.08;
+      final redPeak =
+          -4.1 * math.exp(-math.pow(e - (-95), 2) / (2 * math.pow(55, 2)));
+      pts.add(MeasurementPoint(e, baseline + redPeak));
+    }
+
+    return pts;
+  }
+
+  /// Chronoamperometry — Cottrell decay curve.
+  List<MeasurementPoint> _caPoints() {
+    final pts = <MeasurementPoint>[];
+    for (double t = 0.05; t <= 10.0; t += 0.05) {
+      final i = 6.0 / math.sqrt(t) + 0.1;
+      pts.add(MeasurementPoint(t, i));
+    }
+    return pts;
+  }
+
+  /// SWV / DPV / NPV — single sharp peak on a sloping baseline.
+  List<MeasurementPoint> _pulsePoints() {
+    final pts = <MeasurementPoint>[];
+    for (double e = -400; e <= 400; e += 5) {
+      final baseline = e * 0.0008;
+      final peak =
+          7.5 * math.exp(-math.pow(e - 150, 2) / (2 * math.pow(40, 2)));
+      pts.add(MeasurementPoint(e, baseline + peak));
+    }
+    return pts;
+  }
+
+  // ── Controls ───────────────────────────────────────────────────────────────
+
   void stopMeasurement() {
+    _demoTimer?.cancel();
+    _demoTimer = null;
     _dataSub?.cancel();
     _dataSub = null;
     _state = MeasurementState.done;
@@ -107,6 +194,7 @@ class MeasurementProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _demoTimer?.cancel();
     _dataSub?.cancel();
     super.dispose();
   }
