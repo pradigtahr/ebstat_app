@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/ble_provider.dart';
 import '../theme/app_theme.dart';
 import 'bluetooth_screen.dart';
+import 'mode_selection_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -71,6 +72,23 @@ class HomeScreen extends StatelessWidget {
                     label: const Text('Start Measurement'),
                   ),
                 ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const ModeSelectionScreen()),
+                  ),
+                  icon: const Icon(Icons.play_circle_outline,
+                      color: AppColors.textSecondary),
+                  label: const Text(
+                    'Demo Mode (no device)',
+                    style: TextStyle(color: AppColors.textSecondary),
+                  ),
+                ),
+              ),
               const Spacer(flex: 1),
               const Text(
                 'XIAO nRF52840 · BLE 5.0',
