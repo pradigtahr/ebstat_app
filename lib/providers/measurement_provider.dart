@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import '../data/demo_cv_data.dart';
 import '../models/measurement_point.dart';
 import '../models/voltammetry_mode.dart';
 import '../services/ble_service.dart';
@@ -54,7 +55,7 @@ class MeasurementProvider extends ChangeNotifier {
       _dataSub?.cancel();
       _dataSub = BleService().dataStream.listen(_onData);
     } else {
-      _startDemoSimulation();
+      _startDemoLoop();
     }
   }
 
@@ -77,21 +78,27 @@ class MeasurementProvider extends ChangeNotifier {
     }
   }
 
-  // ── Demo simulation ────────────────────────────────────────────────────────
+  // ── Demo loop ──────────────────────────────────────────────────────────────
 
-  void _startDemoSimulation() {
+  void _startDemoLoop() {
     final pts = _generateDemoPoints();
+    if (pts.isEmpty) return;
+
     int i = 0;
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 40), (timer) {
-      if (_state != MeasurementState.running || i >= pts.length) {
+    _demoTimer?.cancel();
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) {
+      if (_state != MeasurementState.running) {
         timer.cancel();
-        if (_state == MeasurementState.running) {
-          _state = MeasurementState.done;
-          notifyListeners();
-        }
         return;
       }
-      _session!.points.add(pts[i]);
+
+      // Loop: clear chart and restart when one full scan is done
+      if (i >= pts.length) {
+        _session?.points.clear();
+        i = 0;
+      }
+
+      _session?.points.add(pts[i]);
       i++;
       notifyListeners();
     });
@@ -100,7 +107,7 @@ class MeasurementProvider extends ChangeNotifier {
   List<MeasurementPoint> _generateDemoPoints() {
     switch (_selectedMode) {
       case VoltammetryMode.cv:
-        return _cvPoints();
+        return palmSenseCvData;
       case VoltammetryMode.ca:
         return _caPoints();
       case VoltammetryMode.swv:
@@ -112,41 +119,16 @@ class MeasurementProvider extends ChangeNotifier {
     }
   }
 
-  /// Cyclic voltammetry — duck-shaped curve with oxidation + reduction peaks.
-  List<MeasurementPoint> _cvPoints() {
-    final pts = <MeasurementPoint>[];
-    const step = 5.0;
-
-    // Forward sweep: -500 mV → +500 mV
-    for (double e = -500; e <= 500; e += step) {
-      final baseline = 0.08;
-      final oxPeak =
-          5.2 * math.exp(-math.pow(e - 210, 2) / (2 * math.pow(55, 2)));
-      pts.add(MeasurementPoint(e, baseline + oxPeak));
-    }
-
-    // Reverse sweep: +500 mV → -500 mV
-    for (double e = 500; e >= -500; e -= step) {
-      final baseline = -0.08;
-      final redPeak =
-          -4.1 * math.exp(-math.pow(e - (-95), 2) / (2 * math.pow(55, 2)));
-      pts.add(MeasurementPoint(e, baseline + redPeak));
-    }
-
-    return pts;
-  }
-
-  /// Chronoamperometry — Cottrell decay curve.
+  /// Chronoamperometry — Cottrell decay.
   List<MeasurementPoint> _caPoints() {
     final pts = <MeasurementPoint>[];
     for (double t = 0.05; t <= 10.0; t += 0.05) {
-      final i = 6.0 / math.sqrt(t) + 0.1;
-      pts.add(MeasurementPoint(t, i));
+      pts.add(MeasurementPoint(t, 6.0 / math.sqrt(t) + 0.1));
     }
     return pts;
   }
 
-  /// SWV / DPV / NPV — single sharp peak on a sloping baseline.
+  /// SWV / DPV / NPV — single sharp peak.
   List<MeasurementPoint> _pulsePoints() {
     final pts = <MeasurementPoint>[];
     for (double e = -400; e <= 400; e += 5) {
