@@ -39,4 +39,23 @@ class ProjectSession {
       (p) => p.measurementIndex == measurementIndex && p.type == type,
     );
   }
+
+  void deleteMeasurement(int index) {
+    if (index < 0 || index >= measurements.length) return;
+    measurements.removeAt(index);
+    // Remove annotations belonging to this scan
+    peaks.removeWhere((p) => p.measurementIndex == index);
+    // Shift annotation indices for scans that came after the deleted one
+    final shifted = peaks
+        .where((p) => p.measurementIndex > index)
+        .map((p) => PeakAnnotation(
+              measurementIndex: p.measurementIndex - 1,
+              pointIndex: p.pointIndex,
+              type: p.type,
+              point: p.point,
+            ))
+        .toList();
+    peaks.removeWhere((p) => p.measurementIndex > index);
+    peaks.addAll(shifted);
+  }
 }

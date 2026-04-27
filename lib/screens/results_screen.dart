@@ -22,6 +22,8 @@ class ResultsScreen extends StatefulWidget {
 }
 
 class _ResultsScreenState extends State<ResultsScreen> {
+  final Set<int> _hiddenScans = {};
+
   @override
   Widget build(BuildContext context) {
     final measurement = context.watch<MeasurementProvider>();
@@ -37,14 +39,6 @@ class _ResultsScreenState extends State<ResultsScreen> {
             Navigator.of(context).pop();
           },
         ),
-        actions: [
-          if (project != null && project.measurements.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.download_outlined),
-              tooltip: 'Export XLSX',
-              onPressed: measurement.exportProject,
-            ),
-        ],
       ),
       body: project == null || project.measurements.isEmpty
           ? const Center(
@@ -55,14 +49,24 @@ class _ResultsScreenState extends State<ResultsScreen> {
             )
           : Column(
               children: [
-                _ScanLegend(project: project),
+                _ScanLegend(
+                  project: project,
+                  hiddenScans: _hiddenScans,
+                  onToggleVisibility: (idx) =>
+                      setState(() => _hiddenScans.contains(idx)
+                          ? _hiddenScans.remove(idx)
+                          : _hiddenScans.add(idx)),
+                  onDelete: (idx) => _confirmDelete(idx, measurement),
+                ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(8, 8, 16, 0),
                     child: _MultiScanChart(
                       project: project,
-                      onPointTapped: (barIndex, spotIndex) =>
-                          _showAnnotationSheet(context, barIndex, spotIndex, project),
+                      hiddenScans: _hiddenScans,
+                      onPointTapped: (actualIdx, spotIndex) =>
+                          _showAnnotationSheet(
+                              context, actualIdx, spotIndex, project),
                     ),
                   ),
                 ),
@@ -71,6 +75,56 @@ class _ResultsScreenState extends State<ResultsScreen> {
               ],
             ),
     );
+  }
+
+  Future<void> _confirmDelete(
+      int index, MeasurementProvider measurement) async {
+    final project = measurement.project;
+    if (project == null || index >= project.measurements.length) return;
+
+    final session = project.measurements[index];
+    final label = session.label.isNotEmpty
+        ? session.label
+        : 'Scan ${index + 1}';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Delete scan?',
+            style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Remove "$label" from this project? This cannot be undone.',
+          style: const TextStyle(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style:
+                ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _hiddenScans.remove(index);
+      final adjusted = _hiddenScans
+          .map((i) => i > index ? i - 1 : i)
+          .toSet();
+      _hiddenScans
+        ..clear()
+        ..addAll(adjusted);
+    });
+    measurement.deleteMeasurement(index);
   }
 
   void _showAnnotationSheet(
@@ -84,6 +138,9 @@ class _ResultsScreenState extends State<ResultsScreen> {
     if (spotIndex >= session.points.length) return;
     final pt = session.points[spotIndex];
     final color = _scanColors[barIndex % _scanColors.length];
+    final scanLabel = session.label.isNotEmpty
+        ? session.label
+        : 'Scan ${barIndex + 1}';
 
     showModalBottomSheet(
       context: context,
@@ -102,35 +159,38 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 Container(
                   width: 12,
                   height: 12,
-                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                  decoration:
+                      BoxDecoration(color: color, shape: BoxShape.circle),
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Scan ${barIndex + 1}  ·  '
-                  '${pt.x.toStringAsFixed(2)} mV, ${pt.y.toStringAsFixed(4)} µA',
+                  '$scanLabel  ·  '
+                  '${pt.x.toStringAsFixed(1)} mV,  ${pt.y.toStringAsFixed(3)} µA',
                   style: const TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 13,
-                  ),
+                      color: AppColors.textSecondary, fontSize: 13),
                 ),
               ],
             ),
             const SizedBox(height: 16),
             const Text(
               'Label this point as a peak:',
-              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+              style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.redAccent),
                     icon: const Icon(Icons.arrow_downward, size: 18),
                     label: const Text('Cathodic'),
                     onPressed: () {
                       context.read<MeasurementProvider>().annotatePoint(
-                            barIndex, spotIndex, PeakType.cathodic);
+                          barIndex, spotIndex, PeakType.cathodic);
                       Navigator.of(context).pop();
                     },
                   ),
@@ -138,12 +198,13 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber.shade700),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber.shade700),
                     icon: const Icon(Icons.arrow_upward, size: 18),
                     label: const Text('Anodic'),
                     onPressed: () {
                       context.read<MeasurementProvider>().annotatePoint(
-                            barIndex, spotIndex, PeakType.anodic);
+                          barIndex, spotIndex, PeakType.anodic);
                       Navigator.of(context).pop();
                     },
                   ),
@@ -165,24 +226,126 @@ class _ResultsScreenState extends State<ResultsScreen> {
   }
 }
 
+// ── Scan legend with visibility toggle and delete ────────────────────────────
+
+class _ScanLegend extends StatelessWidget {
+  const _ScanLegend({
+    required this.project,
+    required this.hiddenScans,
+    required this.onToggleVisibility,
+    required this.onDelete,
+  });
+
+  final ProjectSession project;
+  final Set<int> hiddenScans;
+  final void Function(int) onToggleVisibility;
+  final void Function(int) onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      color: AppColors.surface,
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 6,
+        children: project.measurements.asMap().entries.map((entry) {
+          final idx = entry.key;
+          final session = entry.value;
+          final color = _scanColors[idx % _scanColors.length];
+          final isHidden = hiddenScans.contains(idx);
+          final label = session.label.isNotEmpty
+              ? session.label
+              : 'Scan ${idx + 1}';
+
+          return GestureDetector(
+            onTap: () => onToggleVisibility(idx),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: isHidden
+                    ? AppColors.primary
+                    : color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isHidden
+                      ? AppColors.divider
+                      : color.withOpacity(0.6),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Color swatch / hidden indicator
+                  Container(
+                    width: 18,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: isHidden ? AppColors.divider : color,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color:
+                          isHidden ? AppColors.textSecondary : Colors.white,
+                      fontSize: 12,
+                      decoration:
+                          isHidden ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  // Delete button
+                  GestureDetector(
+                    onTap: () => onDelete(idx),
+                    child: const Icon(Icons.close,
+                        size: 14, color: Colors.white54),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
 // ── Multi-scan chart ─────────────────────────────────────────────────────────
 
 class _MultiScanChart extends StatelessWidget {
   const _MultiScanChart({
     required this.project,
+    required this.hiddenScans,
     required this.onPointTapped,
   });
 
   final ProjectSession project;
-  final void Function(int barIndex, int spotIndex) onPointTapped;
+  final Set<int> hiddenScans;
+  final void Function(int actualScanIndex, int spotIndex) onPointTapped;
 
   @override
   Widget build(BuildContext context) {
-    final allSpots = project.measurements
-        .expand((s) => s.points.map((p) => FlSpot(p.x, p.y)))
+    final visibleIndices = List.generate(project.measurements.length, (i) => i)
+        .where((i) => !hiddenScans.contains(i))
         .toList();
 
-    if (allSpots.isEmpty) return const SizedBox.shrink();
+    if (visibleIndices.isEmpty) {
+      return const Center(
+        child: Text('All scans hidden — tap a scan to show it.',
+            style: TextStyle(color: AppColors.textSecondary)),
+      );
+    }
+
+    final allSpots = visibleIndices
+        .expand((i) =>
+            project.measurements[i].points.map((p) => FlSpot(p.x, p.y)))
+        .toList();
 
     final minX = allSpots.map((s) => s.x).reduce((a, b) => a < b ? a : b);
     final maxX = allSpots.map((s) => s.x).reduce((a, b) => a > b ? a : b);
@@ -210,35 +373,39 @@ class _MultiScanChart extends StatelessWidget {
           leftTitles: AxisTitles(
             axisNameWidget: const Text(
               'Current (µA)',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+              style:
+                  TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 46,
               getTitlesWidget: (v, _) => Text(
-                v.toStringAsFixed(2),
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 10),
+                v.toStringAsFixed(1),
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 10),
               ),
             ),
           ),
           bottomTitles: AxisTitles(
             axisNameWidget: const Text(
               'Potential (mV)',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+              style:
+                  TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
             sideTitles: SideTitles(
               showTitles: true,
               reservedSize: 28,
               getTitlesWidget: (v, _) => Text(
                 v.toStringAsFixed(0),
-                style: const TextStyle(color: AppColors.textSecondary, fontSize: 10),
+                style: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 10),
               ),
             ),
           ),
-          rightTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false)),
+          topTitles: const AxisTitles(
+              sideTitles: SideTitles(showTitles: false)),
         ),
         minX: minX - xPad,
         maxX: maxX + xPad,
@@ -251,34 +418,40 @@ class _MultiScanChart extends StatelessWidget {
                 response?.lineBarSpots != null &&
                 response!.lineBarSpots!.isNotEmpty) {
               final spot = response.lineBarSpots!.first;
-              onPointTapped(spot.barIndex, spot.spotIndex);
+              final actualIdx = visibleIndices[spot.barIndex];
+              onPointTapped(actualIdx, spot.spotIndex);
             }
           },
           touchTooltipData: LineTouchTooltipData(
             getTooltipColor: (_) => AppColors.surface,
-            getTooltipItems: (spots) => spots
-                .map((s) => LineTooltipItem(
-                      'Scan ${s.barIndex + 1}\n'
-                      '${s.x.toStringAsFixed(2)} mV\n'
-                      '${s.y.toStringAsFixed(4)} µA',
-                      TextStyle(
-                        color: _scanColors[s.barIndex % _scanColors.length],
-                        fontSize: 11,
-                      ),
-                    ))
-                .toList(),
+            getTooltipItems: (spots) => spots.map((s) {
+              final actualIdx = visibleIndices[s.barIndex];
+              final session = project.measurements[actualIdx];
+              final scanLabel = session.label.isNotEmpty
+                  ? session.label
+                  : 'Scan ${actualIdx + 1}';
+              return LineTooltipItem(
+                '$scanLabel\n'
+                '${s.x.toStringAsFixed(1)} mV\n'
+                '${s.y.toStringAsFixed(3)} µA',
+                TextStyle(
+                  color: _scanColors[actualIdx % _scanColors.length],
+                  fontSize: 11,
+                ),
+              );
+            }).toList(),
           ),
         ),
-        lineBarsData: _buildBars(project),
+        lineBarsData: _buildBars(project, visibleIndices),
       ),
       duration: const Duration(milliseconds: 0),
     );
   }
 
-  List<LineChartBarData> _buildBars(ProjectSession project) {
-    return project.measurements.asMap().entries.map((entry) {
-      final idx = entry.key;
-      final session = entry.value;
+  List<LineChartBarData> _buildBars(
+      ProjectSession project, List<int> visibleIndices) {
+    return visibleIndices.map((idx) {
+      final session = project.measurements[idx];
       final color = _scanColors[idx % _scanColors.length];
       final peaksForScan =
           project.peaks.where((p) => p.measurementIndex == idx).toList();
@@ -286,7 +459,7 @@ class _MultiScanChart extends StatelessWidget {
       return LineChartBarData(
         spots: session.points.map((p) => FlSpot(p.x, p.y)).toList(),
         isCurved: true,
-        curveSmoothness: 0.3,
+        curveSmoothness: 0.2,
         color: color,
         barWidth: 2,
         dotData: FlDotData(
@@ -314,50 +487,10 @@ class _MultiScanChart extends StatelessWidget {
         ),
         belowBarData: BarAreaData(
           show: true,
-          color: color.withOpacity(0.06),
+          color: color.withOpacity(0.05),
         ),
       );
     }).toList();
-  }
-}
-
-// ── Scan legend ──────────────────────────────────────────────────────────────
-
-class _ScanLegend extends StatelessWidget {
-  const _ScanLegend({required this.project});
-  final ProjectSession project;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: AppColors.surface,
-      child: Wrap(
-        spacing: 16,
-        runSpacing: 4,
-        children: project.measurements.asMap().entries.map((entry) {
-          final idx = entry.key;
-          final color = _scanColors[idx % _scanColors.length];
-          return Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 20,
-                height: 3,
-                color: color,
-              ),
-              const SizedBox(width: 6),
-              Text(
-                'Scan ${idx + 1}',
-                style: const TextStyle(
-                    color: AppColors.textSecondary, fontSize: 12),
-              ),
-            ],
-          );
-        }).toList(),
-      ),
-    );
   }
 }
 
@@ -374,7 +507,7 @@ class _PeakList extends StatelessWidget {
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: const BoxDecoration(
         color: AppColors.primary,
         border: Border(
@@ -386,12 +519,13 @@ class _PeakList extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Text(
-            'Peak Annotations',
+            'PEAK ANNOTATIONS',
             style: TextStyle(
-                color: AppColors.textSecondary,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 0.5),
+              color: AppColors.textSecondary,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.8,
+            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -401,20 +535,28 @@ class _PeakList extends StatelessWidget {
               final color = peak.type == PeakType.cathodic
                   ? Colors.redAccent
                   : Colors.amber;
+              final session =
+                  project.measurements[peak.measurementIndex];
+              final scanLabel = session.label.isNotEmpty
+                  ? session.label
+                  : 'S${peak.measurementIndex + 1}';
+              final typeLabel =
+                  peak.type == PeakType.cathodic ? 'Ec' : 'Ea';
               final label =
-                  '${peak.type == PeakType.cathodic ? 'Ec' : 'Ea'} (S${peak.measurementIndex + 1}): '
-                  '${peak.point.x.toStringAsFixed(1)} mV, '
+                  '$typeLabel ($scanLabel): ${peak.point.x.toStringAsFixed(1)} mV, '
                   '${peak.point.y.toStringAsFixed(3)} µA';
               return Chip(
                 label: Text(label,
-                    style: const TextStyle(fontSize: 11, color: Colors.white)),
+                    style: const TextStyle(
+                        fontSize: 11, color: Colors.white)),
                 backgroundColor: color.withOpacity(0.2),
                 side: BorderSide(color: color.withOpacity(0.5)),
                 padding: EdgeInsets.zero,
-                deleteIcon: const Icon(Icons.close, size: 14, color: Colors.white54),
+                deleteIcon:
+                    const Icon(Icons.close, size: 14, color: Colors.white54),
                 onDeleted: () {
                   context.read<MeasurementProvider>().removePeakAnnotation(
-                        peak.measurementIndex, peak.type);
+                      peak.measurementIndex, peak.type);
                 },
               );
             }).toList(),
@@ -447,7 +589,8 @@ class _BottomBar extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
                 measurement.exportError!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                style:
+                    const TextStyle(color: Colors.redAccent, fontSize: 12),
               ),
             ),
           Row(

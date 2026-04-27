@@ -64,16 +64,14 @@ class _ParametersScreenState extends State<ParametersScreen> {
                 },
               ),
             ),
-            _StartButton(
-              onPressed: _onStart,
-            ),
+            _StartButton(onPressed: _onStart),
           ],
         ),
       ),
     );
   }
 
-  void _onStart() {
+  Future<void> _onStart() async {
     if (!_formKey.currentState!.validate()) return;
 
     final provider = context.read<MeasurementProvider>();
@@ -82,9 +80,52 @@ class _ParametersScreenState extends State<ParametersScreen> {
       if (value != null) provider.updateParameter(entry.key, value);
     }
 
+    final scanNumber = (provider.project?.measurements.length ?? 0) + 1;
+    final label = await _showLabelDialog(context, 'Scan $scanNumber');
+    if (label == null || !mounted) return;
+
+    provider.setNextLabel(label.isEmpty ? 'Scan $scanNumber' : label);
     Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const MeasurementScreen()),
+    );
+  }
+
+  Future<String?> _showLabelDialog(
+      BuildContext context, String defaultLabel) async {
+    final controller = TextEditingController(text: defaultLabel);
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Label this measurement',
+          style: TextStyle(color: Colors.white, fontSize: 17),
+        ),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: const InputDecoration(
+            hintText: 'e.g. 5 µM, blank, standard…',
+          ),
+          onSubmitted: (_) =>
+              Navigator.of(ctx).pop(controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Start'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -102,8 +143,8 @@ class _ParameterField extends StatelessWidget {
   Widget build(BuildContext context) {
     return TextFormField(
       controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(
-          decimal: true, signed: true),
+      keyboardType:
+          const TextInputType.numberWithOptions(decimal: true, signed: true),
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: parameter.label,

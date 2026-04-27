@@ -1,5 +1,5 @@
 class MeasurementPoint {
-  final double x; // voltage (V) or time (s) depending on mode
+  final double x; // potential (mV) or time (s) depending on mode
   final double y; // current (µA)
 
   const MeasurementPoint(this.x, this.y);
@@ -9,33 +9,32 @@ class MeasurementPoint {
 
 class MeasurementSession {
   final String mode;
+  final String label;
   final Map<String, double> parameters;
   final DateTime startedAt;
   final List<MeasurementPoint> points;
 
   MeasurementSession({
     required this.mode,
+    this.label = '',
     required this.parameters,
     required this.startedAt,
     List<MeasurementPoint>? points,
   }) : points = points ?? [];
 
   List<List<String>> toCsv() {
-    final header = ['EbStat — $mode measurement'];
     final paramRows = parameters.entries
         .map((e) => ['${e.key}', '${e.value}'])
         .toList();
-    final dataHeader = ['x', 'y (µA)'];
-    final dataRows = points.map((p) => p.toCsvRow()).toList();
-
     return [
-      header,
+      ['EbStat — $mode measurement'],
+      if (label.isNotEmpty) ['Label', label],
       ['Started', startedAt.toIso8601String()],
       ['--- Parameters ---'],
       ...paramRows,
       ['--- Data ---'],
-      dataHeader,
-      ...dataRows,
+      ['Potential (mV)', 'Current (µA)'],
+      ...points.map((p) => p.toCsvRow()),
     ];
   }
 }
