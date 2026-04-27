@@ -5,6 +5,7 @@ import '../providers/measurement_provider.dart';
 import '../providers/ble_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/voltammetry_chart.dart';
+import 'results_screen.dart';
 
 class MeasurementScreen extends StatefulWidget {
   const MeasurementScreen({super.key});
@@ -14,12 +15,36 @@ class MeasurementScreen extends StatefulWidget {
 }
 
 class _MeasurementScreenState extends State<MeasurementScreen> {
+  bool _navigated = false;
+
   @override
   void initState() {
     super.initState();
+    final provider = context.read<MeasurementProvider>();
+    provider.addListener(_handleStateChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<MeasurementProvider>().startMeasurement();
+      provider.startMeasurement();
     });
+  }
+
+  @override
+  void dispose() {
+    context.read<MeasurementProvider>().removeListener(_handleStateChange);
+    super.dispose();
+  }
+
+  void _handleStateChange() {
+    if (!mounted || _navigated) return;
+    final m = context.read<MeasurementProvider>();
+    if (m.state == MeasurementState.done) {
+      _navigated = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const ResultsScreen()),
+        );
+      });
+    }
   }
 
   @override
@@ -32,15 +57,6 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
         title: Text(
           '${measurement.selectedMode?.abbreviation ?? ''} Measurement',
         ),
-        actions: [
-          if (measurement.state == MeasurementState.done ||
-              measurement.points.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.download_outlined),
-              tooltip: 'Export CSV',
-              onPressed: measurement.exportCsv,
-            ),
-        ],
       ),
       body: Column(
         children: [
@@ -107,7 +123,6 @@ class _ControlBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isRunning = measurement.state == MeasurementState.running;
-    final isDone = measurement.state == MeasurementState.done;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
@@ -115,53 +130,17 @@ class _ControlBar extends StatelessWidget {
         color: AppColors.primary,
         border: Border(top: BorderSide(color: AppColors.divider)),
       ),
-      child: Column(
+      child: Row(
         children: [
-          if (measurement.exportError != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                measurement.exportError!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: isRunning ? measurement.stopMeasurement : null,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.redAccent,
               ),
+              icon: const Icon(Icons.stop),
+              label: Text(isRunning ? 'Stop' : 'Finishing…'),
             ),
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: isRunning
-                      ? measurement.stopMeasurement
-                      : isDone
-                          ? measurement.resetMeasurement
-                          : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isRunning
-                        ? Colors.redAccent
-                        : AppColors.accent1,
-                  ),
-                  icon: Icon(isRunning
-                      ? Icons.stop
-                      : isDone
-                          ? Icons.refresh
-                          : Icons.play_arrow),
-                  label: Text(
-                    isRunning
-                        ? 'Stop'
-                        : isDone
-                            ? 'New Measurement'
-                            : 'Starting…',
-                  ),
-                ),
-              ),
-              if (measurement.points.isNotEmpty) ...[
-                const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: measurement.exportCsv,
-                  icon: const Icon(Icons.save_alt),
-                  label: const Text('Export CSV'),
-                ),
-              ],
-            ],
           ),
         ],
       ),
