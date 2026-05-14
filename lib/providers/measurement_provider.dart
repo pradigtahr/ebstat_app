@@ -65,7 +65,7 @@ class MeasurementProvider extends ChangeNotifier {
 
     if (BleService().isConnected) {
       _dataSub?.cancel();
-      _dataSub = BleService().dataStream.listen(_onData);
+      _dataSub = BleService().rawLines.listen(_onData);
     } else {
       _startDemoSimulation();
     }

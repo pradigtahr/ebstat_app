@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/ble_provider.dart';
 import '../theme/app_theme.dart';
 import 'bluetooth_screen.dart';
+import 'debug_screen.dart';
 import 'mode_selection_screen.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -14,6 +15,21 @@ class HomeScreen extends StatelessWidget {
     final ble = context.watch<BleProvider>();
 
     return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.terminal,
+                color: AppColors.textSecondary),
+            tooltip: 'Debug Console',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DebugScreen()),
+            ),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),

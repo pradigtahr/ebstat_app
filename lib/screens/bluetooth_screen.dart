@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 
 import '../providers/ble_provider.dart';
 import '../theme/app_theme.dart';
-import '../widgets/device_tile.dart';
 import 'mode_selection_screen.dart';
 
 class BluetoothScreen extends StatefulWidget {
@@ -32,6 +31,29 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
       appBar: AppBar(
         title: const Text('Bluetooth Devices'),
         actions: [
+          // NUS filter toggle
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'NUS only',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              Switch(
+                value: ble.filterNus,
+                onChanged: (v) {
+                  ble.setFilterNus(v);
+                  ble.stopScan().then((_) => ble.startScan());
+                },
+                activeColor: AppColors.accent1,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ],
+          ),
+          // Scan / stop button
           StreamBuilder<bool>(
             stream: ble.isScanning,
             builder: (_, snap) {
@@ -39,9 +61,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
               return IconButton(
                 icon: Icon(scanning ? Icons.stop : Icons.refresh),
                 tooltip: scanning ? 'Stop scan' : 'Rescan',
-                onPressed: scanning
-                    ? ble.stopScan
-                    : ble.startScan,
+                onPressed: scanning ? ble.stopScan : ble.startScan,
               );
             },
           ),
@@ -51,6 +71,11 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
         children: [
           _ScanBar(ble: ble),
           if (ble.isConnected) _ConnectedBanner(ble: ble),
+          // Saved device chip
+          if (!ble.isConnected &&
+              ble.savedDeviceId != null &&
+              ble.savedDeviceName != null)
+            _SavedDeviceChip(ble: ble),
           Expanded(
             child: StreamBuilder<List<ScanResult>>(
               stream: ble.scanResults,
@@ -66,11 +91,11 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
                   separatorBuilder: (_, __) => const SizedBox(height: 8),
                   itemBuilder: (_, i) {
                     final r = results[i];
-                    final isConnected =
+                    final isConn =
                         ble.connectedDevice?.remoteId == r.device.remoteId;
-                    return DeviceTile(
+                    return _DeviceTileWithRssi(
                       result: r,
-                      isConnected: isConnected,
+                      isConnected: isConn,
                       isConnecting: ble.status == BleStatus.connecting,
                       onTap: () => _onDeviceTap(context, ble, r.device),
                     );
@@ -93,23 +118,35 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     }
     await ble.connect(device);
     if (!mounted) return;
-    if (ble.isConnected && widget.goToModeSelection) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const ModeSelectionScreen()),
-      );
-    } else if (ble.isConnected) {
+    if (ble.isConnected) {
+      if (widget.goToModeSelection) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const ModeSelectionScreen()),
+        );
+      } else {
+        final name = device.platformName.isNotEmpty
+            ? device.platformName
+            : device.remoteId.str;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Connected to $name'),
+            backgroundColor: AppColors.accent1,
+          ),
+        );
+      }
+    } else if (ble.errorMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-              'Connected to ${device.platformName.isNotEmpty ? device.platformName : device.remoteId}'),
-          backgroundColor: AppColors.accent1,
+          content: Text(ble.errorMessage!),
+          backgroundColor: Colors.redAccent,
         ),
       );
     }
   }
 }
 
+// ── Scan progress bar ─────────────────────────────────────────────────────────
 class _ScanBar extends StatelessWidget {
   const _ScanBar({required this.ble});
   final BleProvider ble;
@@ -134,6 +171,7 @@ class _ScanBar extends StatelessWidget {
   }
 }
 
+// ── Connected device banner ───────────────────────────────────────────────────
 class _ConnectedBanner extends StatelessWidget {
   const _ConnectedBanner({required this.ble});
   final BleProvider ble;
@@ -160,15 +198,14 @@ class _ConnectedBanner extends StatelessWidget {
             ),
           ),
           TextButton(
-            style:
-                TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
             onPressed: ble.disconnect,
             child: const Text('Disconnect'),
           ),
           if (Navigator.canPop(context))
             TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: AppColors.accent2),
+              style:
+                  TextButton.styleFrom(foregroundColor: AppColors.accent2),
               onPressed: () => Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
@@ -182,6 +219,144 @@ class _ConnectedBanner extends StatelessWidget {
   }
 }
 
+// ── Saved-device reconnect chip ───────────────────────────────────────────────
+class _SavedDeviceChip extends StatelessWidget {
+  const _SavedDeviceChip({required this.ble});
+  final BleProvider ble;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: AppColors.surface,
+      child: Row(
+        children: [
+          const Icon(Icons.history, size: 14, color: AppColors.accent2),
+          const SizedBox(width: 8),
+          Text(
+            'Last device: ${ble.savedDeviceName}',
+            style: const TextStyle(
+                color: AppColors.accent2, fontSize: 12),
+          ),
+          const Spacer(),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.accent2,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            onPressed: () async {
+              await ble.clearSavedDevice();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Saved device cleared')),
+                );
+              }
+            },
+            child: const Text('Forget', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Device tile with RSSI ─────────────────────────────────────────────────────
+class _DeviceTileWithRssi extends StatelessWidget {
+  const _DeviceTileWithRssi({
+    required this.result,
+    required this.isConnected,
+    required this.isConnecting,
+    required this.onTap,
+  });
+
+  final ScanResult result;
+  final bool       isConnected;
+  final bool       isConnecting;
+  final VoidCallback onTap;
+
+  String _rssiLabel(int rssi) {
+    if (rssi >= -60) return 'Excellent ($rssi dBm)';
+    if (rssi >= -70) return 'Good ($rssi dBm)';
+    if (rssi >= -80) return 'Fair ($rssi dBm)';
+    return 'Weak ($rssi dBm)';
+  }
+
+  Color _rssiColor(int rssi) {
+    if (rssi >= -60) return AppColors.accent1;
+    if (rssi >= -70) return Colors.greenAccent;
+    if (rssi >= -80) return Colors.orangeAccent;
+    return Colors.redAccent;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final device = result.device;
+    final name   = device.platformName.isNotEmpty
+        ? device.platformName
+        : 'Unknown Device';
+    final rssi   = result.rssi;
+
+    return Card(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: isConnected
+              ? AppColors.accent1
+              : AppColors.surface,
+        ),
+      ),
+      child: ListTile(
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        leading: Icon(
+          isConnected ? Icons.bluetooth_connected : Icons.bluetooth,
+          color: isConnected ? AppColors.accent1 : AppColors.textSecondary,
+        ),
+        title: Text(
+          name,
+          style: TextStyle(
+            color: isConnected ? AppColors.accent1 : Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              device.remoteId.str,
+              style: const TextStyle(
+                  color: AppColors.textSecondary, fontSize: 11),
+            ),
+            if (rssi != 0)
+              Text(
+                _rssiLabel(rssi),
+                style: TextStyle(
+                    color: _rssiColor(rssi), fontSize: 11),
+              ),
+          ],
+        ),
+        trailing: isConnecting && !isConnected
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : isConnected
+                ? const Icon(Icons.check_circle,
+                    color: AppColors.accent1)
+                : const Icon(Icons.chevron_right,
+                    color: AppColors.textSecondary),
+        onTap: isConnecting ? null : onTap,
+      ),
+    );
+  }
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.ble});
   final BleProvider ble;
@@ -203,9 +378,22 @@ class _EmptyState extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                scanning ? 'Scanning for devices…' : 'No devices found',
+                scanning
+                    ? 'Scanning for devices…'
+                    : 'No devices found',
                 style: const TextStyle(color: AppColors.textSecondary),
               ),
+              if (!scanning && ble.filterNus)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    'NUS filter is ON — only EBstat devices shown',
+                    style: TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
               if (!scanning) ...[
                 const SizedBox(height: 16),
                 ElevatedButton(
