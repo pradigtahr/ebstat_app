@@ -28,6 +28,12 @@ dependencies:
   # Share / save file
   share_plus: ^9.0.0
 
+  # Multi-sheet xlsx export
+  excel: ^4.0.0
+
+  # Persist last-connected device address + presets
+  shared_preferences: ^2.3.2
+
   # Runtime permissions (BLE, storage)
   permission_handler: ^11.3.1
 

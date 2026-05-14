@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
 import '../theme/app_theme.dart';
+import 'lmp_config_screen.dart';
 import 'parameters_screen.dart';
 
 class ModeSelectionScreen extends StatelessWidget {
@@ -35,7 +36,19 @@ class ModeSelectionScreen extends StatelessWidget {
     final measurement = context.watch<MeasurementProvider>();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Select Voltammetry Mode')),
+      appBar: AppBar(
+        title: const Text('Select Voltammetry Mode'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.tune_outlined),
+            tooltip: 'LMP91000 Configuration',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const LmpConfigScreen()),
+            ),
+          ),
+        ],
+      ),
       body: ListView.separated(
         padding: const EdgeInsets.all(16),
         itemCount: VoltammetryMode.values.length,
