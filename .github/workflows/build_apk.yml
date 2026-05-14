@@ -1,0 +1,50 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - claude/android-electrochemistry-app-9alyl
+  workflow_dispatch:          # allow manual trigger from GitHub UI
+
+jobs:
+  build:
+    name: Build release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Java 17 (required by current Flutter / Gradle toolchain) ──────────
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # ── Flutter stable ────────────────────────────────────────────────────
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # ── Dependencies ──────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: flutter pub get
+
+      # ── Static analysis (non-blocking — shows warnings without failing) ──
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos || true
+
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build release APK
+        run: flutter build apk --release
+
+      # ── Upload artifact ───────────────────────────────────────────────────
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebstat-release-${{ github.run_number }}
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
