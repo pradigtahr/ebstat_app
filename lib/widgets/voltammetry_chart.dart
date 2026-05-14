@@ -5,8 +5,15 @@ import '../models/measurement_point.dart';
 import '../theme/app_theme.dart';
 
 class VoltammetryChart extends StatelessWidget {
-  const VoltammetryChart({super.key, required this.points});
+  const VoltammetryChart({
+    super.key,
+    required this.points,
+    this.xLabel = 'Potential (mV)',
+    this.yLabel = 'Current (µA)',
+  });
   final List<MeasurementPoint> points;
+  final String xLabel;
+  final String yLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -60,9 +67,9 @@ class VoltammetryChart extends StatelessWidget {
         ),
         titlesData: FlTitlesData(
           leftTitles: AxisTitles(
-            axisNameWidget: const Text(
-              'Current (µA)',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+            axisNameWidget: Text(
+              yLabel,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
             sideTitles: SideTitles(
               showTitles: true,
@@ -75,9 +82,9 @@ class VoltammetryChart extends StatelessWidget {
             ),
           ),
           bottomTitles: AxisTitles(
-            axisNameWidget: const Text(
-              'Potential (mV)',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 11),
+            axisNameWidget: Text(
+              xLabel,
+              style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
             sideTitles: SideTitles(
               showTitles: true,

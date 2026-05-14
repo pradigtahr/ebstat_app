@@ -2,42 +2,50 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
+import '../ble/protocol.dart';
 import '../models/measurement_point.dart';
 import '../models/project_session.dart';
 import '../models/voltammetry_mode.dart';
 import '../services/ble_service.dart';
+import '../services/transcript_service.dart';
 import '../services/xlsx_export_service.dart';
 
-enum MeasurementState { idle, running, paused, done }
+enum MeasurementState { idle, running, done }
 
 class MeasurementProvider extends ChangeNotifier {
-  VoltammetryMode? _selectedMode;
-  Map<String, double> _parameters = {};
-  MeasurementState _state = MeasurementState.idle;
-  MeasurementSession? _session;
-  ProjectSession? _project;
-  String? _exportError;
-  String _nextLabel = '';
+  VoltammetryMode?      _selectedMode;
+  Map<String, double>   _parameters  = {};
+  MeasurementState      _state       = MeasurementState.idle;
+  MeasurementSession?   _session;
+  ProjectSession?       _project;
+  String?               _exportError;
+  String                _nextLabel   = '';
+  ProgressUpdate?       _progress;
+  String?               _lastBleRow;
 
-  StreamSubscription<String>? _dataSub;
-  Timer? _demoTimer;
+  StreamSubscription<String>?         _dataSub;
+  StreamSubscription<ProgressUpdate>? _progressSub;
+  Timer?                              _demoTimer;
 
-  VoltammetryMode? get selectedMode => _selectedMode;
-  Map<String, double> get parameters => Map.unmodifiable(_parameters);
-  MeasurementState get state => _state;
-  MeasurementSession? get session => _session;
-  ProjectSession? get project => _project;
-  List<MeasurementPoint> get points => _session?.points ?? [];
-  String? get exportError => _exportError;
+  // ── Getters ───────────────────────────────────────────────────────────────
+  VoltammetryMode?      get selectedMode => _selectedMode;
+  Map<String, double>   get parameters   => Map.unmodifiable(_parameters);
+  MeasurementState      get state        => _state;
+  MeasurementSession?   get session      => _session;
+  ProjectSession?       get project      => _project;
+  List<MeasurementPoint> get points      => _session?.points ?? [];
+  String?               get exportError  => _exportError;
+  ProgressUpdate?       get progress     => _progress;
+  String?               get lastBleRow   => _lastBleRow;
 
   void selectMode(VoltammetryMode mode) {
     _selectedMode = mode;
-    _parameters = {
+    _parameters   = {
       for (final p in modeParameters[mode]!) p.key: p.defaultValue,
     };
     _project = ProjectSession(modeName: mode.abbreviation);
     _session = null;
-    _state = MeasurementState.idle;
+    _state   = MeasurementState.idle;
     _exportError = null;
     notifyListeners();
   }
@@ -49,48 +57,116 @@ class MeasurementProvider extends ChangeNotifier {
 
   void setNextLabel(String label) => _nextLabel = label;
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Start
+  // ═══════════════════════════════════════════════════════════════════════════
+
   void startMeasurement() {
     if (_selectedMode == null) return;
     _project ??= ProjectSession(modeName: _selectedMode!.abbreviation);
     _session = MeasurementSession(
-      mode: _selectedMode!.abbreviation,
-      label: _nextLabel,
+      mode:       _selectedMode!.abbreviation,
+      label:      _nextLabel,
       parameters: Map.from(_parameters),
-      startedAt: DateTime.now(),
+      startedAt:  DateTime.now(),
     );
-    _nextLabel = '';
-    _state = MeasurementState.running;
+    _nextLabel   = '';
+    _state       = MeasurementState.running;
     _exportError = null;
+    _progress    = null;
+    _lastBleRow  = null;
     notifyListeners();
 
     if (BleService().isConnected) {
-      _dataSub?.cancel();
-      _dataSub = BleService().rawLines.listen(_onData);
+      _startBleMeasurement();
     } else {
       _startDemoSimulation();
     }
   }
 
-  // ── BLE data handler ───────────────────────────────────────────────────────
+  // ── BLE path ──────────────────────────────────────────────────────────────
 
-  void _onData(String raw) {
-    if (_state != MeasurementState.running) return;
-    final parts = raw.split(',');
-    double? x, y;
-    if (parts.length >= 2) {
-      x = double.tryParse(parts[0].trim());
-      y = double.tryParse(parts[1].trim());
-    } else if (parts.length == 1) {
-      y = double.tryParse(parts[0].trim());
-      x = _session!.points.length.toDouble();
-    }
-    if (x != null && y != null) {
-      _session!.points.add(MeasurementPoint(x, y));
+  void _startBleMeasurement() {
+    final mode     = _selectedMode!.abbreviation;
+    final paramMap = <String, dynamic>{
+      for (final e in _parameters.entries) e.key: e.value.round(),
+    };
+    final cmd = EbstatProtocol.buildMeasurementCmd(mode, paramMap);
+
+    bool headerSeen = false;
+
+    _dataSub = BleService().rawLines.listen((line) {
+      if (_state != MeasurementState.running) return;
+      if (FwTerminator.is_(line) || EbstatProtocol.isMetadata(line)) return;
+      if (!headerSeen) {
+        headerSeen = true; // first non-# line is the CSV header
+        return;
+      }
+      _lastBleRow = line;
+      final cols = EbstatProtocol.parseCsvLine(line);
+      if (cols.length >= 2) {
+        final x = double.tryParse(cols[0]);
+        final y = double.tryParse(cols[1]);
+        if (x != null && y != null) {
+          _session!.points.add(MeasurementPoint(x, y));
+          notifyListeners();
+        }
+      }
+    });
+
+    _progressSub = BleService().progressStream.listen((prog) {
+      _progress = prog;
       notifyListeners();
-    }
+    });
+
+    BleService()
+        .sendCommand(cmd)
+        .then(_onBleRunComplete)
+        .catchError(_onBleRunError);
   }
 
-  // ── Demo simulation (single run, stops automatically) ─────────────────────
+  Future<void> _onBleRunComplete(RunResult result) async {
+    _dataSub?.cancel();
+    _dataSub = null;
+    _progressSub?.cancel();
+    _progressSub = null;
+    _progress   = null;
+
+    if (_session != null && _session!.points.isNotEmpty) {
+      _project?.addMeasurement(_session!);
+      try {
+        await TranscriptService.save(
+          result:    result,
+          technique: _session!.mode,
+          label:     _session!.label,
+          startedAt: _session!.startedAt,
+          points:    _session!.points,
+        );
+      } catch (_) {
+        // transcript save is best-effort
+      }
+    }
+    _state = MeasurementState.done;
+    notifyListeners();
+  }
+
+  void _onBleRunError(Object error) {
+    _dataSub?.cancel();
+    _dataSub = null;
+    _progressSub?.cancel();
+    _progressSub = null;
+    _progress    = null;
+    if (_session != null && _session!.points.isNotEmpty) {
+      _project?.addMeasurement(_session!);
+    }
+    _state       = MeasurementState.done;
+    _exportError = error is BleDisconnectedException
+        ? 'Device disconnected mid-run'
+        : 'BLE error: $error';
+    notifyListeners();
+  }
+
+  // ── Demo simulation ───────────────────────────────────────────────────────
 
   void _startDemoSimulation() {
     final scanIndex = (_project?.measurements.length ?? 0) % 3;
@@ -106,7 +182,7 @@ class MeasurementProvider extends ChangeNotifier {
       }
       if (i >= pts.length) {
         timer.cancel();
-        stopMeasurement();
+        _finishDemo();
         return;
       }
       _session?.points.add(pts[i]);
@@ -115,58 +191,41 @@ class MeasurementProvider extends ChangeNotifier {
     });
   }
 
-  List<MeasurementPoint> _getDemoPoints(int scanIndex) {
-    switch (_selectedMode) {
-      case VoltammetryMode.cv:
-        return _cvPoints(scanIndex);
-      case VoltammetryMode.ca:
-        return _caPoints(scanIndex);
-      case VoltammetryMode.swv:
-      case VoltammetryMode.dpv:
-      case VoltammetryMode.npv:
-        return _pulsePoints(scanIndex);
-      case null:
-        return [];
+  void _finishDemo() {
+    if (_session != null && _session!.points.isNotEmpty) {
+      _project?.addMeasurement(_session!);
     }
+    _state = MeasurementState.done;
+    notifyListeners();
   }
 
-  /// Full cyclic voltammogram: forward sweep + backward sweep.
-  /// Produces a recognisable CV with cathodic dip and anodic peak.
+  List<MeasurementPoint> _getDemoPoints(int scanIndex) {
+    return switch (_selectedMode) {
+      VoltammetryMode.cv  => _cvPoints(scanIndex),
+      VoltammetryMode.ca  => _caPoints(scanIndex),
+      _                   => _pulsePoints(scanIndex),
+    };
+  }
+
   List<MeasurementPoint> _cvPoints(int scanIndex) {
-    // Scale peak amplitude to simulate different concentrations
     final scale = [1.0, 1.55, 0.65][scanIndex % 3];
-
-    const eStart = -200.0; // mV
-    const eVertex = 500.0; // mV
-    const ePc = 150.0;     // cathodic peak potential
-    const ePa = 220.0;     // anodic peak potential (ΔEp ≈ 70 mV)
-    const iPc = 7.0;       // base cathodic peak height (µA)
-    const iPa = 5.5;       // base anodic peak height (µA)
-    const sigma = 50.0;    // peak width (mV)
-    const step = 5.0;
-
+    const eStart = -200.0, eVertex = 500.0;
+    const ePc = 150.0, ePa = 220.0;
+    const iPc = 7.0,  iPa = 5.5, sigma = 50.0, step = 5.0;
     final pts = <MeasurementPoint>[];
-
-    // Forward scan: eStart → eVertex
     for (double e = eStart; e <= eVertex; e += step) {
-      final baseline = -0.4 * scale;
       final cathodic =
           -iPc * scale * math.exp(-math.pow(e - ePc, 2) / (2 * sigma * sigma));
-      pts.add(MeasurementPoint(e, baseline + cathodic));
+      pts.add(MeasurementPoint(e, -0.4 * scale + cathodic));
     }
-
-    // Backward scan: eVertex → eStart (skip vertex to avoid duplicate)
     for (double e = eVertex - step; e >= eStart; e -= step) {
-      final baseline = 0.3 * scale;
       final anodic =
           iPa * scale * math.exp(-math.pow(e - ePa, 2) / (2 * sigma * sigma));
-      pts.add(MeasurementPoint(e, baseline + anodic));
+      pts.add(MeasurementPoint(e, 0.3 * scale + anodic));
     }
-
     return pts;
   }
 
-  /// Chronoamperometry — Cottrell decay.
   List<MeasurementPoint> _caPoints(int scanIndex) {
     final scale = [1.0, 1.4, 0.7][scanIndex % 3];
     final pts = <MeasurementPoint>[];
@@ -176,27 +235,34 @@ class MeasurementProvider extends ChangeNotifier {
     return pts;
   }
 
-  /// SWV / DPV / NPV — single sharp peak.
   List<MeasurementPoint> _pulsePoints(int scanIndex) {
     final scale = [1.0, 1.4, 0.7][scanIndex % 3];
     final pts = <MeasurementPoint>[];
     for (double e = -400; e <= 400; e += 5) {
-      final baseline = e * 0.0008;
       final peak = scale *
           7.5 *
           math.exp(-math.pow(e - 150, 2) / (2 * math.pow(40, 2)));
-      pts.add(MeasurementPoint(e, baseline + peak));
+      pts.add(MeasurementPoint(e, e * 0.0008 + peak));
     }
     return pts;
   }
 
-  // ── Controls ───────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Controls
+  // ═══════════════════════════════════════════════════════════════════════════
 
   void stopMeasurement() {
+    if (BleService().isConnected && _state == MeasurementState.running) {
+      BleService().sendStop();
+      // State transitions in _onBleRunComplete when ABORTED arrives
+      return;
+    }
     _demoTimer?.cancel();
     _demoTimer = null;
     _dataSub?.cancel();
     _dataSub = null;
+    _progressSub?.cancel();
+    _progressSub = null;
     if (_session != null && _session!.points.isNotEmpty) {
       _project?.addMeasurement(_session!);
     }
@@ -204,17 +270,23 @@ class MeasurementProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Resets the current in-progress session but keeps the project intact.
   void resetMeasurement() {
     _demoTimer?.cancel();
     _demoTimer = null;
     _dataSub?.cancel();
     _dataSub = null;
-    _session = null;
-    _state = MeasurementState.idle;
+    _progressSub?.cancel();
+    _progressSub = null;
+    _session     = null;
+    _state       = MeasurementState.idle;
     _exportError = null;
+    _progress    = null;
     notifyListeners();
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Annotations / project
+  // ═══════════════════════════════════════════════════════════════════════════
 
   void annotatePoint(int measurementIndex, int pointIndex, PeakType type) {
     if (_project == null) return;
@@ -222,9 +294,9 @@ class MeasurementProvider extends ChangeNotifier {
     if (pointIndex >= session.points.length) return;
     _project!.annotatePeak(PeakAnnotation(
       measurementIndex: measurementIndex,
-      pointIndex: pointIndex,
-      type: type,
-      point: session.points[pointIndex],
+      pointIndex:       pointIndex,
+      type:             type,
+      point:            session.points[pointIndex],
     ));
     notifyListeners();
   }
@@ -238,6 +310,10 @@ class MeasurementProvider extends ChangeNotifier {
     _project?.deleteMeasurement(index);
     notifyListeners();
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Export
+  // ═══════════════════════════════════════════════════════════════════════════
 
   Future<void> exportProject() async {
     if (_project == null || _project!.measurements.isEmpty) {
@@ -258,6 +334,7 @@ class MeasurementProvider extends ChangeNotifier {
   void dispose() {
     _demoTimer?.cancel();
     _dataSub?.cancel();
+    _progressSub?.cancel();
     super.dispose();
   }
 }
