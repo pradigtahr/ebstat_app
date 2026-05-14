@@ -382,10 +382,12 @@ class _ParameterField extends StatelessWidget {
   String? get _rangeText {
     if (parameter.min == null && parameter.max == null) return null;
     final parts = <String>[];
-    if (parameter.min != null)
+    if (parameter.min != null) {
       parts.add('min: ${parameter.min!.toStringAsFixed(0)}');
-    if (parameter.max != null)
+    }
+    if (parameter.max != null) {
       parts.add('max: ${parameter.max!.toStringAsFixed(0)}');
+    }
     return parts.join(' · ');
   }
 }
