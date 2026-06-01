@@ -7,6 +7,7 @@ import '../services/preset_service.dart';
 import '../theme/app_theme.dart';
 import 'measurement_screen.dart';
 
+
 class ParametersScreen extends StatefulWidget {
   const ParametersScreen({super.key, required this.mode});
   final VoltammetryMode mode;
@@ -47,6 +48,13 @@ class _ParametersScreenState extends State<ParametersScreen> {
       appBar: AppBar(
         title: Text('${widget.mode.abbreviation} Parameters'),
         actions: [
+          // SG Savitzky–Golay filter toggle (only relevant for CV)
+          if (widget.mode == VoltammetryMode.cv)
+            _SgToggle(
+              enabled: context.watch<MeasurementProvider>().sgEnabled,
+              onChanged: (v) =>
+                  context.read<MeasurementProvider>().setSgEnabled(v),
+            ),
           IconButton(
             icon: const Icon(Icons.bookmarks_outlined),
             tooltip: 'Presets',
@@ -390,6 +398,37 @@ class _ParameterField extends StatelessWidget {
     }
     return parts.join(' · ');
   }
+}
+
+// ── SG filter toggle ──────────────────────────────────────────────────────────
+class _SgToggle extends StatelessWidget {
+  const _SgToggle({required this.enabled, required this.onChanged});
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'SG',
+              style: TextStyle(
+                color: enabled ? AppColors.accent1 : AppColors.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Switch(
+              value: enabled,
+              onChanged: onChanged,
+              activeColor: AppColors.accent1,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ],
+        ),
+      );
 }
 
 // ── Start button ──────────────────────────────────────────────────────────────

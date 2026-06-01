@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../ble/protocol.dart';
+import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
 import '../providers/ble_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/cv_chart.dart';
 import '../widgets/voltammetry_chart.dart';
-import 'results_screen.dart';
+import 'analysis_screen.dart';
 
 class MeasurementScreen extends StatefulWidget {
   const MeasurementScreen({super.key});
@@ -16,35 +17,14 @@ class MeasurementScreen extends StatefulWidget {
 }
 
 class _MeasurementScreenState extends State<MeasurementScreen> {
-  bool _navigated = false;
+  bool _showSgOverlay = true;
 
   @override
   void initState() {
     super.initState();
-    final provider = context.read<MeasurementProvider>();
-    provider.addListener(_handleStateChange);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      provider.startMeasurement();
+      context.read<MeasurementProvider>().startMeasurement();
     });
-  }
-
-  @override
-  void dispose() {
-    context.read<MeasurementProvider>().removeListener(_handleStateChange);
-    super.dispose();
-  }
-
-  void _handleStateChange() {
-    if (!mounted || _navigated) return;
-    if (context.read<MeasurementProvider>().state == MeasurementState.done) {
-      _navigated = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const ResultsScreen()),
-        );
-      });
-    }
   }
 
   @override
@@ -52,18 +32,41 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
     final measurement = context.watch<MeasurementProvider>();
     final ble         = context.watch<BleProvider>();
     final isRunning   = measurement.state == MeasurementState.running;
+    final isDone      = measurement.state == MeasurementState.done;
+    final isCv        = measurement.selectedMode == VoltammetryMode.cv;
 
     return Scaffold(
       appBar: AppBar(
         title: Text('${measurement.selectedMode?.abbreviation ?? ''} Measurement'),
         automaticallyImplyLeading: false,
+        actions: [
+          // SG overlay toggle — only relevant when done and SG data present
+          if (isDone && isCv && _hasSgData(measurement))
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('SG',
+                    style: TextStyle(
+                        color: _showSgOverlay
+                            ? AppColors.accent1
+                            : AppColors.textSecondary,
+                        fontSize: 12)),
+                Switch(
+                  value: _showSgOverlay,
+                  onChanged: (v) => setState(() => _showSgOverlay = v),
+                  activeColor: AppColors.accent1,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ],
+            ),
+        ],
       ),
       body: Column(
         children: [
-          // Progress / status banner
+          // Status banner
           _StatusBanner(ble: ble, measurement: measurement),
 
-          // Progress bar (BLE mode only)
+          // Progress bar
           if (ble.isConnected && measurement.progress != null)
             LinearProgressIndicator(
               value: measurement.progress!.fraction,
@@ -75,8 +78,7 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
           else if (isRunning)
             const LinearProgressIndicator(
               backgroundColor: AppColors.surface,
-              valueColor:
-                  AlwaysStoppedAnimation<Color>(AppColors.accent1),
+              valueColor: AlwaysStoppedAnimation<Color>(AppColors.accent1),
               minHeight: 3,
             ),
 
@@ -84,11 +86,19 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.all(16),
-              child: VoltammetryChart(
-                points: measurement.points,
-                xLabel: measurement.selectedMode?.xAxisLabel ?? 'X',
-                yLabel: measurement.selectedMode?.yAxisLabel ?? 'Y',
-              ),
+              child: isCv
+                  ? CvChart(
+                      points: measurement.points,
+                      sgPoints: _currentSgPoints(measurement),
+                      showSg: _showSgOverlay,
+                    )
+                  : VoltammetryChart(
+                      points: measurement.points,
+                      xLabel:
+                          measurement.selectedMode?.xAxisLabel ?? 'X',
+                      yLabel:
+                          measurement.selectedMode?.yAxisLabel ?? 'Y',
+                    ),
             ),
           ),
 
@@ -97,6 +107,18 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
         ],
       ),
     );
+  }
+
+  bool _hasSgData(MeasurementProvider m) {
+    final project = m.project;
+    if (project == null || project.measurements.isEmpty) return false;
+    return project.measurements.last.hasSgData;
+  }
+
+  List<double?> _currentSgPoints(MeasurementProvider m) {
+    final project = m.project;
+    if (project == null || project.measurements.isEmpty) return const [];
+    return project.measurements.last.sgPoints;
   }
 }
 
@@ -110,10 +132,13 @@ class _StatusBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final progress  = measurement.progress;
     final isRunning = measurement.state == MeasurementState.running;
+    final isDone    = measurement.state == MeasurementState.done;
 
-    String text;
+    final String text;
     if (ble.isConnected) {
-      if (progress != null) {
+      if (isDone) {
+        text = 'Measurement complete · ${measurement.points.length} pts';
+      } else if (progress != null) {
         text = 'RX: ${measurement.lastBleRow ?? "…"}  '
             '· ${progress.current}/${progress.total} pts';
       } else if (isRunning) {
@@ -167,6 +192,7 @@ class _ControlBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isRunning = measurement.state == MeasurementState.running;
+    final isDone    = measurement.state == MeasurementState.done;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
@@ -176,15 +202,28 @@ class _ControlBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Expanded(
-            child: ElevatedButton.icon(
-              onPressed: isRunning ? measurement.stopMeasurement : null,
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent),
-              icon: const Icon(Icons.stop),
-              label: Text(isRunning ? 'Stop' : 'Finishing…'),
+          if (isDone) ...[
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AnalysisScreen()),
+                ),
+                icon: const Icon(Icons.analytics),
+                label: const Text('View Analysis'),
+              ),
             ),
-          ),
+          ] else ...[
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: isRunning ? measurement.stopMeasurement : null,
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.redAccent),
+                icon: const Icon(Icons.stop),
+                label: Text(isRunning ? 'Stop' : 'Finishing…'),
+              ),
+            ),
+          ],
         ],
       ),
     );

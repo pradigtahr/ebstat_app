@@ -16,6 +16,65 @@ class PeakAnnotation {
   });
 }
 
+class MeasurementSession {
+  final String mode;
+  final String label;
+  /// Human-readable name for the measurement tree, e.g. "Cyclic Voltammetry 1"
+  final String displayName;
+  final Map<String, double> parameters;
+  final DateTime startedAt;
+  final List<MeasurementPoint> points;
+  /// SG Savitzky–Golay smoothed current values, indexed from 0 (null = missing).
+  /// Populated after DONE from firmware SG,<idx>,<current_nA> lines.
+  final List<double?> sgPoints;
+
+  MeasurementSession({
+    required this.mode,
+    this.label = '',
+    required this.displayName,
+    required this.parameters,
+    required this.startedAt,
+    List<MeasurementPoint>? points,
+  })  : points = points ?? [],
+        sgPoints = [];
+
+  /// Distinct cycle numbers in this session (CV only).
+  Set<int> get cycles => {
+        for (final p in points)
+          if (p.cycle != null) p.cycle!,
+      };
+
+  bool get hasSgData => sgPoints.any((v) => v != null);
+
+  /// Remove all points belonging to [cycleNum] (CV only).
+  void deleteCycle(int cycleNum) =>
+      points.removeWhere((p) => p.cycle == cycleNum);
+
+  List<List<String>> toCsv() {
+    final hasCycleData = points.any((p) => p.cycle != null);
+    final paramRows =
+        parameters.entries.map((e) => [e.key, '${e.value}']).toList();
+    return [
+      ['EbStat — $mode measurement'],
+      if (label.isNotEmpty) ['Label', label],
+      ['Name', displayName],
+      ['Started', startedAt.toIso8601String()],
+      ['--- Parameters ---'],
+      ...paramRows,
+      ['--- Data ---'],
+      [
+        mode == 'CA' ? 'Time (ms)' : 'Potential (mV)',
+        'Current (nA)',
+        if (hasCycleData) ...['Cycle', 'Direction'],
+      ],
+      ...points.map((p) => [
+            ...p.toCsvRow(),
+            if (hasCycleData) ...['${p.cycle ?? ''}', p.direction ?? ''],
+          ]),
+    ];
+  }
+}
+
 class ProjectSession {
   final String modeName;
   final List<MeasurementSession> measurements;
@@ -43,9 +102,7 @@ class ProjectSession {
   void deleteMeasurement(int index) {
     if (index < 0 || index >= measurements.length) return;
     measurements.removeAt(index);
-    // Remove annotations belonging to this scan
     peaks.removeWhere((p) => p.measurementIndex == index);
-    // Shift annotation indices for scans that came after the deleted one
     final shifted = peaks
         .where((p) => p.measurementIndex > index)
         .map((p) => PeakAnnotation(
