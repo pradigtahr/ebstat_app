@@ -98,23 +98,6 @@ class HomeScreen extends StatelessWidget {
                     label: const Text('Start Measurement'),
                   ),
                 ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: TextButton.icon(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                        builder: (_) => const ModeSelectionScreen()),
-                  ),
-                  icon: const Icon(Icons.play_circle_outline,
-                      color: AppColors.textSecondary),
-                  label: const Text(
-                    'Demo Mode (no device)',
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                ),
-              ),
               const Spacer(flex: 1),
               const Text(
                 'XIAO nRF52840 · BLE 5.0',
