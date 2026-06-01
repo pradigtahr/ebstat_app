@@ -9,7 +9,7 @@ class VoltammetryChart extends StatelessWidget {
     super.key,
     required this.points,
     this.xLabel = 'Potential (mV)',
-    this.yLabel = 'Current (µA)',
+    this.yLabel = 'Current (nA)',
   });
   final List<MeasurementPoint> points;
   final String xLabel;
@@ -112,7 +112,7 @@ class VoltammetryChart extends StatelessWidget {
             getTooltipColor: (_) => AppColors.surface,
             getTooltipItems: (spots) => spots
                 .map((s) => LineTooltipItem(
-                      'x: ${s.x.toStringAsFixed(2)}\ny: ${s.y.toStringAsFixed(4)} µA',
+                      'x: ${s.x.toStringAsFixed(2)}\ny: ${s.y.toStringAsFixed(4)} nA',
                       const TextStyle(
                           color: Colors.white, fontSize: 11),
                     ))

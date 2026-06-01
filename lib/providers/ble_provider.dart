@@ -25,7 +25,9 @@ class BleProvider extends ChangeNotifier {
   }
 
   // ── Getters ───────────────────────────────────────────────────────────────
-  BleStatus get status          => _status;
+  // Status always reflects the physical connection first; _status only
+  // matters when not connected (scanning, connecting, error, idle).
+  BleStatus get status => _ble.isConnected ? BleStatus.connected : _status;
   String?   get errorMessage    => _errorMessage;
   bool      get filterNus       => _filterNus;
   bool      get isConnected     => _ble.isConnected;

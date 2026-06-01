@@ -33,8 +33,8 @@ class XlsxExportService {
       }
       sheet.appendRow([TextCellValue('--- Data ---')]);
       sheet.appendRow([
-        TextCellValue('Potential (mV)'),
-        TextCellValue('Current (µA)'),
+        TextCellValue(session.mode == 'CA' ? 'Time (ms)' : 'Potential (mV)'),
+        TextCellValue('Current (nA)'),
       ]);
       for (final pt in session.points) {
         sheet.appendRow([
@@ -51,7 +51,7 @@ class XlsxExportService {
         TextCellValue('Scan'),
         TextCellValue('Type'),
         TextCellValue('Potential (mV)'),
-        TextCellValue('Current (µA)'),
+        TextCellValue('Current (nA)'),
       ]);
       for (final peak in project.peaks) {
         peakSheet.appendRow([

@@ -94,6 +94,10 @@ class MeasurementProvider extends ChangeNotifier {
     final cmd = EbstatProtocol.buildMeasurementCmd(mode, paramMap);
 
     bool headerSeen = false;
+    // Look up the correct column indices once for the whole run.
+    final xy   = EbstatProtocol.xyColumns(mode);
+    final xIdx = xy[0];
+    final yIdx = xy[1];
 
     _dataSub = BleService().rawLines.listen((line) {
       if (_state != MeasurementState.running) return;
@@ -103,10 +107,12 @@ class MeasurementProvider extends ChangeNotifier {
         return;
       }
       _lastBleRow = line;
-      final cols = EbstatProtocol.parseCsvLine(line);
-      if (cols.length >= 2) {
-        final x = double.tryParse(cols[0]);
-        final y = double.tryParse(cols[1]);
+      // Use raw split (no filtering) so column indices stay stable.
+      // ERR values from firmware become null via tryParse and are skipped.
+      final cols = line.split(',');
+      if (cols.length > yIdx) {
+        final x = double.tryParse(cols[xIdx].trim());
+        final y = double.tryParse(cols[yIdx].trim());
         if (x != null && y != null) {
           _session!.points.add(MeasurementPoint(x, y));
           notifyListeners();

@@ -91,8 +91,7 @@ class HomeScreen extends StatelessWidget {
                     onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(
-                          builder: (_) => const BluetoothScreen(
-                              goToModeSelection: true)),
+                          builder: (_) => const ModeSelectionScreen()),
                     ),
                     icon: const Icon(Icons.science_outlined),
                     label: const Text('Start Measurement'),

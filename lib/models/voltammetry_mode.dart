@@ -15,7 +15,7 @@ enum VoltammetryMode {
   /// X-axis label for the chart.
   String get xAxisLabel =>
       this == VoltammetryMode.ca ? 'Time (ms)' : 'Potential (mV)';
-  String get yAxisLabel => 'Current (µA)';
+  String get yAxisLabel => 'Current (nA)';
 }
 
 class VoltammetryParameter {

@@ -165,7 +165,7 @@ class _ResultsScreenState extends State<ResultsScreen> {
                 const SizedBox(width: 8),
                 Text(
                   '$scanLabel  ·  '
-                  '${pt.x.toStringAsFixed(1)} mV,  ${pt.y.toStringAsFixed(3)} µA',
+                  '${pt.x.toStringAsFixed(1)} mV,  ${pt.y.toStringAsFixed(3)} nA',
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 13),
                 ),
@@ -372,7 +372,7 @@ class _MultiScanChart extends StatelessWidget {
         titlesData: FlTitlesData(
           leftTitles: AxisTitles(
             axisNameWidget: const Text(
-              'Current (µA)',
+              'Current (nA)',
               style:
                   TextStyle(color: AppColors.textSecondary, fontSize: 11),
             ),
@@ -433,7 +433,7 @@ class _MultiScanChart extends StatelessWidget {
               return LineTooltipItem(
                 '$scanLabel\n'
                 '${s.x.toStringAsFixed(1)} mV\n'
-                '${s.y.toStringAsFixed(3)} µA',
+                '${s.y.toStringAsFixed(3)} nA',
                 TextStyle(
                   color: _scanColors[actualIdx % _scanColors.length],
                   fontSize: 11,
@@ -544,7 +544,7 @@ class _PeakList extends StatelessWidget {
                   peak.type == PeakType.cathodic ? 'Ec' : 'Ea';
               final label =
                   '$typeLabel ($scanLabel): ${peak.point.x.toStringAsFixed(1)} mV, '
-                  '${peak.point.y.toStringAsFixed(3)} µA';
+                  '${peak.point.y.toStringAsFixed(3)} nA';
               return Chip(
                 label: Text(label,
                     style: const TextStyle(

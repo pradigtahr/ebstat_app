@@ -1,6 +1,6 @@
 class MeasurementPoint {
-  final double x; // potential (mV) or time (s) depending on mode
-  final double y; // current (µA)
+  final double x; // potential (mV) or time (ms) depending on mode
+  final double y; // current (nA)
 
   const MeasurementPoint(this.x, this.y);
 
@@ -33,7 +33,7 @@ class MeasurementSession {
       ['--- Parameters ---'],
       ...paramRows,
       ['--- Data ---'],
-      ['Potential (mV)', 'Current (µA)'],
+      [mode == 'CA' ? 'Time (ms)' : 'Potential (mV)', 'Current (nA)'],
       ...points.map((p) => p.toCsvRow()),
     ];
   }
