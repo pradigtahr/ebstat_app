@@ -53,6 +53,10 @@ class RunResult {
   /// All accumulated "# key=val" metadata (merged across all metadata lines)
   final Map<String, String> metadata;
 
+  /// Raw text of every "# …" comment line received (stripped of leading "# ").
+  /// Useful for info commands (LMP, HELP, STATUS) that use free-text replies.
+  final List<String> comments;
+
   /// CSV column names from the first non-# line (empty if no CSV output)
   final List<String> header;
 
@@ -62,6 +66,7 @@ class RunResult {
   const RunResult({
     required this.aborted,
     this.metadata = const {},
+    this.comments = const [],
     this.header = const [],
     this.rawRows = const [],
   });

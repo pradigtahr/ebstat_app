@@ -205,8 +205,8 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
       final result = await ble.sendCommand(FwCmd.caps);
       setState(() {
         _capsMetadata = result.metadata.isEmpty ? null : result.metadata;
-        _statusMsg = result.aborted
-            ? 'CAPS query aborted.'
+        _statusMsg = result.metadata.isEmpty
+            ? 'No capability data received.'
             : 'Capabilities received.';
       });
     } catch (e) {
@@ -231,9 +231,12 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
     );
     try {
       final result = await ble.sendCommand(cmd);
+      final hasError = result.comments.any(
+        (c) => c.toLowerCase().contains('err'),
+      );
       setState(() {
-        _statusMsg = result.aborted
-            ? 'Configuration rejected by device.'
+        _statusMsg = hasError
+            ? 'Device reported an error applying configuration.'
             : 'Configuration applied.';
       });
     } catch (e) {

@@ -13,8 +13,11 @@ import '../ble/protocol.dart';
 //
 // Architecture:
 //   • rawLines   — broadcast stream of every '\n'-terminated line from device
-//   • sendCommand() — queues a command; returns Future<RunResult> that
-//                     resolves when DONE/ABORTED arrives
+//   • sendCommand() — queues a command; returns Future<RunResult>
+//     - Measurement commands (CA/CV/NPV/DPV/SWV): resolve on DONE/ABORTED
+//     - Info commands (LMP, HELP, STATUS, CAPS, …): resolve after 400 ms of
+//       silence following the last received line, or after a 3 s hard timeout
+//       if the device never responds at all.
 //   • sendStop()    — sends STOP immediately, bypassing the queue
 //   • progressStream — emits ProgressUpdate from "# progress=N/M" lines
 //   • connectionState — true = connected, false = disconnected
@@ -104,7 +107,6 @@ class BleService {
     });
 
     // Request MTU=247 — nRF52840 supports up to 247.
-    // firmware: BLE_GATT_ATT_MTU_MAX is set in prj.conf
     try {
       _mtu = await device.requestMtu(247);
     } catch (_) {
@@ -157,6 +159,7 @@ class BleService {
     // Fail any in-flight command so callers don't hang
     if (_inFlight && _queue.isNotEmpty) {
       final cmd = _queue.removeFirst();
+      cmd.idleTimer?.cancel();
       _inFlight = false;
       if (!cmd.completer.isCompleted) {
         cmd.completer.completeError(
@@ -176,6 +179,10 @@ class BleService {
     _rxChar   = null;
     _txChar   = null;
     _rxBuf.clear();
+    // Cancel any pending idle timers before clearing the queue
+    for (final cmd in _queue) {
+      cmd.idleTimer?.cancel();
+    }
     _inFlight = false;
     _connStateSC.add(false);
   }
@@ -214,14 +221,27 @@ class BleService {
     if (_queue.isEmpty || !_inFlight) return;
     final cmd = _queue.first;
 
+    // ── Info commands: reset idle timer on every received line ─────────────
+    // After 400 ms of silence, the command is considered complete.
+    if (cmd.isInfoCmd) {
+      cmd.idleTimer?.cancel();
+      cmd.idleTimer = Timer(
+        const Duration(milliseconds: 400),
+        () => _resolveInfoCmd(cmd),
+      );
+    }
+
     // ── Terminator ────────────────────────────────────────────────────────
+    // Measurement commands end here; also handle unexpected DONE for info cmds.
     if (FwTerminator.is_(line)) {
+      cmd.idleTimer?.cancel();
       _queue.removeFirst();
       _inFlight = false;
       if (!cmd.completer.isCompleted) {
         cmd.completer.complete(RunResult(
           aborted:  line == FwTerminator.aborted,
           metadata: Map.from(cmd.meta),
+          comments: List.from(cmd.rawComments),
           header:   List.from(cmd.header),
           rawRows:  List.from(cmd.rows),
         ));
@@ -230,8 +250,9 @@ class BleService {
       return;
     }
 
-    // ── Metadata ──────────────────────────────────────────────────────────
+    // ── Metadata / comment lines ──────────────────────────────────────────
     if (EbstatProtocol.isMetadata(line)) {
+      cmd.rawComments.add(line.substring(1).trim()); // stripped of leading "# "
       final parsed = EbstatProtocol.parseMetadata(line);
       cmd.meta.addAll(parsed);
       final prog = EbstatProtocol.extractProgress(parsed);
@@ -241,7 +262,7 @@ class BleService {
 
     // ── CSV header (first non-# non-terminator line) ──────────────────────
     if (!cmd.headerSeen) {
-      cmd.header   = EbstatProtocol.parseCsvLine(line);
+      cmd.header     = EbstatProtocol.parseCsvLine(line);
       cmd.headerSeen = true;
       return;
     }
@@ -250,12 +271,32 @@ class BleService {
     cmd.rows.add(line);
   }
 
+  /// Called by the idle timer when an info command's response has gone quiet.
+  void _resolveInfoCmd(_PendingCmd cmd) {
+    if (_queue.isEmpty || _queue.first != cmd) return;
+    if (cmd.completer.isCompleted) return;
+    cmd.idleTimer = null;
+    _queue.removeFirst();
+    _inFlight = false;
+    cmd.completer.complete(RunResult(
+      aborted:  false,
+      metadata: Map.from(cmd.meta),
+      comments: List.from(cmd.rawComments),
+      header:   List.from(cmd.header),
+      rawRows:  List.from(cmd.rows),
+    ));
+    _drainQueue();
+  }
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Send
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /// Queue [cmd] (with optional ID prefix) and return a [Future<RunResult>]
-  /// that completes when DONE or ABORTED is received from the firmware.
+  /// Queue [cmd] (with optional ID prefix) and return a [Future<RunResult>].
+  ///
+  /// • Measurement commands (CA/CV/NPV/DPV/SWV): resolve on DONE or ABORTED.
+  /// • Info commands (everything else): resolve after 400 ms of silence, or
+  ///   after a 3 s hard timeout if the device never responds.
   Future<RunResult> sendCommand(String cmd, {int? id}) {
     if (_rxChar == null) {
       return Future.error(
@@ -279,7 +320,17 @@ class BleService {
   void _drainQueue() {
     if (_inFlight || _queue.isEmpty || _rxChar == null) return;
     _inFlight = true;
-    _writeBytes(utf8.encode(_queue.first.text));
+    final cmd = _queue.first;
+    _writeBytes(utf8.encode(cmd.text));
+    // For info commands, start a 3 s hard timeout in case the device never
+    // responds at all.  This is cancelled and replaced with a 400 ms idle
+    // timer each time a line actually arrives (_routeToQueue).
+    if (cmd.isInfoCmd) {
+      cmd.idleTimer = Timer(
+        const Duration(seconds: 3),
+        () => _resolveInfoCmd(cmd),
+      );
+    }
   }
 
   Future<void> _writeBytes(List<int> bytes) async {
@@ -325,13 +376,31 @@ class BleService {
 
 // ── Internal: pending command in the send queue ───────────────────────────────
 class _PendingCmd {
-  final String             text;
-  final Completer<RunResult> completer = Completer();
-  final Map<String, String> meta       = {};
-  List<String>             header     = [];
-  final List<String>       rows       = [];
-  bool                     headerSeen = false;
-  _PendingCmd(this.text);
+  final String               text;
+  final bool                 isInfoCmd;
+  final Completer<RunResult> completer   = Completer();
+  final Map<String, String>  meta        = {};
+  final List<String>         rawComments = [];
+  List<String>               header      = [];
+  final List<String>         rows        = [];
+  bool                       headerSeen  = false;
+  Timer?                     idleTimer;
+
+  _PendingCmd(this.text) : isInfoCmd = _detectInfoCmd(text);
+
+  /// Returns true for info/config commands that never emit DONE/ABORTED.
+  /// Measurement commands (CA/CV/NPV/DPV/SWV) return false.
+  static bool _detectInfoCmd(String cmdText) {
+    var text = cmdText.trimRight(); // strip trailing \n
+    // Strip optional ID: prefix: "ID:42,CV,..." → "CV,..."
+    if (text.startsWith('ID:')) {
+      final comma = text.indexOf(',');
+      if (comma >= 0) text = text.substring(comma + 1);
+    }
+    final technique = text.split(',').first.toUpperCase();
+    const measurementCmds = {'CA', 'CV', 'NPV', 'DPV', 'SWV'};
+    return !measurementCmds.contains(technique);
+  }
 }
 
 // ── Typed exception for disconnection mid-run ─────────────────────────────────
