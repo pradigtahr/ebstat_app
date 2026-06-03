@@ -72,11 +72,11 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
     ),
     const VoltammetryParameter(
       key: 'quiet_ms', label: 'Quiet Time', unit: 'ms',
-      hint: '2000', defaultValue: 2000, min: 0, max: 10000,
+      hint: '2000', defaultValue: 2000, min: 0,
     ),
     const VoltammetryParameter(
       key: 'step_ms', label: 'Step Duration', unit: 'ms',
-      hint: '5000', defaultValue: 100, min: 1, max: 60000,
+      hint: '5000', defaultValue: 100, min: 5000,
     ),
     const VoltammetryParameter(
       key: 'samples', label: 'Samples', unit: '#',
