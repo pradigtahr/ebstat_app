@@ -361,6 +361,26 @@ class MeasurementProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Replace the current project with an externally-constructed [project]
+  /// (e.g. imported from CSV). Cancels any in-progress measurement.
+  void importProject(ProjectSession project, VoltammetryMode mode) {
+    _demoTimer?.cancel();
+    _demoTimer = null;
+    _dataSub?.cancel();
+    _dataSub = null;
+    _progressSub?.cancel();
+    _progressSub = null;
+    _sgTimer?.cancel();
+    _sgTimer = null;
+    _project      = project;
+    _selectedMode = mode;
+    _session      = null;
+    _state        = MeasurementState.done;
+    _exportError  = null;
+    _progress     = null;
+    notifyListeners();
+  }
+
   void resetMeasurement() {
     _demoTimer?.cancel();
     _demoTimer = null;

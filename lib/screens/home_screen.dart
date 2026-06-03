@@ -1,15 +1,113 @@
+import 'dart:io' as dart_io;
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/voltammetry_mode.dart';
 import '../providers/ble_provider.dart';
+import '../providers/measurement_provider.dart';
+import '../services/csv_import_service.dart';
 import '../theme/app_theme.dart';
+import 'analysis_screen.dart';
 import 'bluetooth_screen.dart';
 import 'debug_screen.dart';
 import 'history_screen.dart';
 import 'mode_selection_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  bool _importing = false;
+
+  // ── Import ────────────────────────────────────────────────────────────────
+
+  Future<void> _importData() async {
+    setState(() => _importing = true);
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+        withData: true, // ensure bytes are always loaded, regardless of platform
+      );
+      if (result == null || result.files.isEmpty || !mounted) return;
+
+      final file = result.files.single;
+      final Uint8List bytes;
+      if (file.bytes != null) {
+        bytes = file.bytes!;
+      } else if (file.path != null) {
+        bytes = await _HomeScreenState._readBytes(file.path!);
+      } else {
+        _showError('Could not read file content.');
+        return;
+      }
+
+      final project = CsvImportService.importFromBytes(bytes);
+      final mode = VoltammetryMode.values
+          .where((m) => m.abbreviation == project.modeName)
+          .firstOrNull;
+      if (mode == null) {
+        _showError('Unsupported technique: ${project.modeName}');
+        return;
+      }
+
+      if (!mounted) return;
+      context.read<MeasurementProvider>().importProject(project, mode);
+
+      final count = project.measurements.length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+              'Imported $count measurement${count == 1 ? '' : 's'}'),
+        ),
+      );
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const AnalysisScreen()),
+      );
+    } on CsvImportException catch (e) {
+      if (mounted) _showError(e.message);
+    } catch (e) {
+      if (mounted) _showError('Import failed: $e');
+    } finally {
+      if (mounted) setState(() => _importing = false);
+    }
+  }
+
+  static Future<Uint8List> _readBytes(String path) async {
+    final dart_io.File file = dart_io.File(path);
+    return file.readAsBytes();
+  }
+
+  void _showError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title: const Text('Import Error',
+            style: TextStyle(color: Colors.white)),
+        content: Text(message,
+            style: const TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -81,6 +179,21 @@ class HomeScreen extends StatelessWidget {
                   label: Text(
                     ble.isConnected ? 'Manage Connection' : 'Scan for Device',
                   ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _importing ? null : _importData,
+                  icon: _importing
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white))
+                      : const Icon(Icons.file_open),
+                  label: const Text('Import Data'),
                 ),
               ),
               const SizedBox(height: 16),

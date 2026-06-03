@@ -5,6 +5,7 @@ import '../models/voltammetry_mode.dart';
 ///
 /// Format:
 ///   Date and time:,<export timestamp>
+///   Technique:,CV                    ← uppercase abbreviation; used by importer
 ///   Notes:
 ///   (empty row)
 ///   Series1,,Series2,,…        ← one pair of columns per series
@@ -71,6 +72,7 @@ class PalmsensCsvService {
 
     // Header block
     sb.writeln('Date and time:,$now');
+    sb.writeln('Technique:,${mode?.abbreviation ?? ''}');
     sb.writeln('Notes:');
     sb.writeln(); // empty separator row
 
