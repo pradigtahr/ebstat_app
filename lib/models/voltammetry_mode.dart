@@ -54,7 +54,7 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
     ),
     const VoltammetryParameter(
       key: 'scan_rate_mV_s', label: 'Scan Rate', unit: 'mV/s',
-      hint: '50', defaultValue: 50, min: 1, max: 500,
+      hint: '50', defaultValue: 50, min: 1, max: 100,
     ),
     const VoltammetryParameter(
       key: 'n_cycles', label: 'Cycles', unit: '#',
@@ -76,7 +76,7 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
     ),
     const VoltammetryParameter(
       key: 'step_ms', label: 'Step Duration', unit: 'ms',
-      hint: '100', defaultValue: 100, min: 10, max: 10000,
+      hint: '5000', defaultValue: 100, min: 10, max: 60000,
     ),
     const VoltammetryParameter(
       key: 'samples', label: 'Samples', unit: '#',

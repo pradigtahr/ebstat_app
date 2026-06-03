@@ -23,12 +23,8 @@ class _ParametersScreenState extends State<ParametersScreen> {
   @override
   void initState() {
     super.initState();
-    final provider = context.read<MeasurementProvider>();
     for (final p in modeParameters[widget.mode]!) {
-      _controllers[p.key] = TextEditingController(
-        text: (provider.parameters[p.key] ?? p.defaultValue)
-            .toStringAsFixed(0),
-      );
+      _controllers[p.key] = TextEditingController();
     }
   }
 
@@ -367,7 +363,8 @@ class _ParameterField extends StatelessWidget {
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
         labelText: parameter.label,
-        hintText: parameter.hint,
+        hintText: 'e.g. ${parameter.hint}',
+        hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
         suffixText: parameter.unit,
         suffixStyle: const TextStyle(color: AppColors.accent2),
         helperText: _rangeText,
