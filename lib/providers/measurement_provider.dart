@@ -146,6 +146,8 @@ class MeasurementProvider extends ChangeNotifier {
             if (isCv && cols.length > 2) {
               // CV: col[1]=cycle (int), col[2]=direction ('start'/'fwd'/'rev')
               final cycle = int.tryParse(cols[1].trim());
+              // cycle 0 is a warmup/parking sample at V_start — discard it
+              if (cycle == 0) return;
               final dir   = cols[2].trim();
               pt = MeasurementPoint(x, y,
                   cycle: cycle, direction: dir.isNotEmpty ? dir : null);

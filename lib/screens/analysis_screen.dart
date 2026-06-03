@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 import '../models/project_session.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
+import '../services/palmsens_csv_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/cv_chart.dart';
 import 'parameters_screen.dart';
@@ -817,10 +818,12 @@ class _BottomBar extends StatelessWidget {
       ),
       child: Row(
         children: [
-          OutlinedButton.icon(
-            onPressed: () => _showExportSheet(context),
-            icon: const Icon(Icons.save_alt, size: 18),
-            label: const Text('Export CSV'),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: () => _showExportSheet(context),
+              icon: const Icon(Icons.save_alt, size: 18),
+              label: const Text('Export CSV'),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -871,6 +874,7 @@ class _ExportSheetState extends State<_ExportSheet> {
   final Set<String> _selCycles       = {};
   bool _exporting = false;
   String? _error;
+  late TextEditingController _filenameCtrl;
 
   bool get _isCv => widget.mode == VoltammetryMode.cv;
 
@@ -886,17 +890,41 @@ class _ExportSheetState extends State<_ExportSheet> {
         }
       }
     }
+    final tech = widget.mode?.abbreviation ?? 'EbStat';
+    _filenameCtrl = TextEditingController(
+        text: 'EbStat_${tech}_${_filenameTimestamp(DateTime.now())}');
   }
+
+  @override
+  void dispose() {
+    _filenameCtrl.dispose();
+    super.dispose();
+  }
+
+  static String _filenameTimestamp(DateTime dt) {
+    final y  = dt.year.toString().padLeft(4, '0');
+    final mo = dt.month.toString().padLeft(2, '0');
+    final d  = dt.day.toString().padLeft(2, '0');
+    final h  = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    final s  = dt.second.toString().padLeft(2, '0');
+    return '${y}${mo}${d}_${h}${mi}${s}';
+  }
+
+  /// Strip characters illegal in common file systems, trim whitespace.
+  static String _sanitizeFilename(String raw) =>
+      raw.replaceAll(RegExp(r'[/\\:*?"<>|]'), '').trim();
 
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
       expand: false,
-      initialChildSize: 0.6,
+      initialChildSize: 0.65,
       minChildSize: 0.4,
-      maxChildSize: 0.9,
+      maxChildSize: 0.92,
       builder: (_, ctrl) => Column(
         children: [
+          // Handle
           Container(
             margin: const EdgeInsets.only(top: 10, bottom: 4),
             width: 36,
@@ -905,12 +933,13 @@ class _ExportSheetState extends State<_ExportSheet> {
                 color: AppColors.divider,
                 borderRadius: BorderRadius.circular(2)),
           ),
+          // Title + export button
           Padding(
             padding:
                 const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             child: Row(
               children: [
-                const Text('Select data to export',
+                const Text('Export CSV',
                     style: TextStyle(
                         color: Colors.white,
                         fontSize: 17,
@@ -928,6 +957,23 @@ class _ExportSheetState extends State<_ExportSheet> {
               ],
             ),
           ),
+          // Filename field
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: TextField(
+              controller: _filenameCtrl,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'File name',
+                suffixText: '.csv',
+                suffixStyle: const TextStyle(color: AppColors.textSecondary),
+                helperText: 'Illegal characters ( / \\ : * ? " < > | ) are removed',
+                helperStyle: const TextStyle(
+                    color: AppColors.textSecondary, fontSize: 10),
+                helperMaxLines: 1,
+              ),
+            ),
+          ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
@@ -936,6 +982,7 @@ class _ExportSheetState extends State<_ExportSheet> {
                       color: Colors.redAccent, fontSize: 12)),
             ),
           const Divider(color: AppColors.divider, height: 1),
+          // Selection tree
           Expanded(
             child: ListView.builder(
               controller: ctrl,
@@ -1019,63 +1066,24 @@ class _ExportSheetState extends State<_ExportSheet> {
   }
 
   Future<void> _export(BuildContext context) async {
+    // Validate filename
+    final rawName = _filenameCtrl.text;
+    final cleanName = _sanitizeFilename(rawName);
+    if (cleanName.isEmpty) {
+      setState(() => _error = 'File name cannot be empty.');
+      return;
+    }
+
     setState(() { _exporting = true; _error = null; });
     try {
-      final buf = StringBuffer();
-      bool headerWritten = false;
-      final isCv = _isCv;
+      final csvContent = PalmsensCsvService.build(
+        widget.project,
+        widget.mode,
+        selMeasurements: _selMeasurements,
+        selCycles: _selCycles,
+      );
 
-      for (int mIdx = 0; mIdx < widget.project.measurements.length; mIdx++) {
-        if (!_selMeasurements.contains(mIdx)) continue;
-        final session = widget.project.measurements[mIdx];
-
-        for (int pIdx = 0; pIdx < session.points.length; pIdx++) {
-          final pt = session.points[pIdx];
-
-          // CV: skip if cycle not selected
-          if (isCv && pt.cycle != null &&
-              !_selCycles.contains('$mIdx:${pt.cycle}')) continue;
-
-          if (!headerWritten) {
-            if (isCv) {
-              buf.writeln(
-                  'measurement_name,label,cycle,direction,potential_mV,current_nA');
-            } else {
-              final xH = session.mode == 'CA' ? 'time_ms' : 'potential_mV';
-              buf.writeln('measurement_name,label,$xH,current_nA');
-            }
-            headerWritten = true;
-          }
-
-          if (isCv) {
-            buf.writeln('"${session.displayName}",'
-                '"${session.label}",'
-                '${pt.cycle ?? ""},'
-                '${pt.direction ?? ""},'
-                '${pt.x.toStringAsFixed(4)},'
-                '${pt.y.toStringAsFixed(6)}');
-          } else {
-            buf.writeln('"${session.displayName}",'
-                '"${session.label}",'
-                '${pt.x.toStringAsFixed(4)},'
-                '${pt.y.toStringAsFixed(6)}');
-          }
-        }
-
-        // Append SG data section if selected
-        if (isCv && _selCycles.isNotEmpty && session.hasSgData) {
-          buf.writeln('# SG smoothed current for ${session.displayName}');
-          buf.writeln('measurement_name,index,sg_current_nA');
-          for (int i = 0; i < session.sgPoints.length; i++) {
-            final sg = session.sgPoints[i];
-            if (sg != null) {
-              buf.writeln('"${session.displayName}",$i,${sg.toStringAsFixed(6)}');
-            }
-          }
-        }
-      }
-
-      if (!headerWritten) {
+      if (csvContent.isEmpty) {
         setState(() {
           _exporting = false;
           _error = 'Nothing selected to export.';
@@ -1083,17 +1091,13 @@ class _ExportSheetState extends State<_ExportSheet> {
         return;
       }
 
-      final dir = await getTemporaryDirectory();
-      final ts  = DateTime.now()
-          .toIso8601String()
-          .replaceAll(':', '-')
-          .replaceAll('.', '-');
-      final file = File('${dir.path}/ebstat_export_$ts.csv');
-      await file.writeAsString(buf.toString());
+      final dir  = await getTemporaryDirectory();
+      final file = File('${dir.path}/$cleanName.csv');
+      await file.writeAsString(csvContent);
 
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'text/csv')],
-        subject: 'EbStat export',
+        subject: 'EbStat export — $cleanName',
       );
 
       if (mounted) Navigator.of(context).pop();
