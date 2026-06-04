@@ -26,7 +26,7 @@ dependencies:
   path_provider: ^2.1.3
 
   # Share / save file
-  share_plus: ^9.0.0
+  share_plus: ^12.0.2
 
   # Multi-sheet xlsx export
   excel: ^4.0.0

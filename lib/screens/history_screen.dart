@@ -40,9 +40,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<void> _share(TranscriptInfo info) async {
-    await Share.shareXFiles(
-      [XFile(info.file.path, mimeType: 'text/csv')],
-      subject: '${info.technique} transcript — ${info.timestampLabel}',
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(info.file.path, mimeType: 'text/csv')],
+        subject: '${info.technique} transcript — ${info.timestampLabel}',
+      ),
     );
   }
 
@@ -251,9 +253,11 @@ class _TranscriptPreviewScreenState
           IconButton(
             icon: const Icon(Icons.share_outlined),
             tooltip: 'Share',
-            onPressed: () => Share.shareXFiles(
-              [XFile(widget.info.file.path, mimeType: 'text/csv')],
-              subject: widget.info.basename,
+            onPressed: () => SharePlus.instance.share(
+              ShareParams(
+                files: [XFile(widget.info.file.path, mimeType: 'text/csv')],
+                subject: widget.info.basename,
+              ),
             ),
           ),
         ],

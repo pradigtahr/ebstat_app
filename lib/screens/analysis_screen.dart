@@ -1094,9 +1094,11 @@ class _ExportSheetState extends State<_ExportSheet> {
       final file = File('${dir.path}/$cleanName.csv');
       await file.writeAsString(csvContent);
 
-      await Share.shareXFiles(
-        [XFile(file.path, mimeType: 'text/csv')],
-        subject: 'EbStat export — $cleanName',
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path, mimeType: 'text/csv')],
+          subject: 'EbStat export — $cleanName',
+        ),
       );
 
       if (mounted) Navigator.of(context).pop();

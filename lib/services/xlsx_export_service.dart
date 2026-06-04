@@ -75,9 +75,11 @@ class XlsxExportService {
     final file = File('${dir.path}/$fileName');
     await file.writeAsBytes(bytes);
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
-      subject: 'EbStat — ${project.modeName} project data',
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
+        subject: 'EbStat — ${project.modeName} project data',
+      ),
     );
   }
 }

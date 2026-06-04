@@ -19,9 +19,11 @@ class CsvExportService {
     final file = File('${dir.path}/$fileName');
     await file.writeAsString(csvString);
 
-    await Share.shareXFiles(
-      [XFile(file.path, mimeType: 'text/csv')],
-      subject: 'EbStat — ${session.mode} measurement data',
+    await SharePlus.instance.share(
+      ShareParams(
+        files: [XFile(file.path, mimeType: 'text/csv')],
+        subject: 'EbStat — ${session.mode} measurement data',
+      ),
     );
   }
 }
