@@ -38,7 +38,7 @@ dependencies:
   permission_handler: ^11.3.1
 
   # Native file picker for CSV import
-  file_picker: ^8.0.0
+  file_picker: ^11.0.2
 
   cupertino_icons: ^1.0.8
 

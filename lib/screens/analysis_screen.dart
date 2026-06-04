@@ -827,7 +827,7 @@ class _BottomBar extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: ElevatedButton.icon(
+            child: OutlinedButton(
               onPressed: () {
                 provider.resetMeasurement();
                 if (mode != null) {
@@ -838,8 +838,7 @@ class _BottomBar extends StatelessWidget {
                   );
                 }
               },
-              icon: const Icon(Icons.add),
-              label: const Text('New Measurement'),
+              child: const Text('+ New'),
             ),
           ),
         ],

@@ -147,7 +147,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _Logo(),
               const SizedBox(height: 12),
               const Text(
-                'EbStat',
+                'EBstat',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 36,
@@ -157,7 +157,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               const SizedBox(height: 6),
               const Text(
-                'Electrochemistry Bluetooth Stat',
+                'Malaria Electrochemistry Diagnostic Kit',
                 style: TextStyle(
                   color: AppColors.textSecondary,
                   fontSize: 14,
