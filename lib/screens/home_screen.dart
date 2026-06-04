@@ -31,7 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _importData() async {
     setState(() => _importing = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['csv'],
         withData: true, // ensure bytes are always loaded, regardless of platform
