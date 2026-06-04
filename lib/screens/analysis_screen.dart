@@ -23,7 +23,9 @@ class _BarMeta {
 }
 
 class AnalysisScreen extends StatefulWidget {
-  const AnalysisScreen({super.key});
+  const AnalysisScreen({super.key, this.isImportedSession = false});
+
+  final bool isImportedSession;
 
   @override
   State<AnalysisScreen> createState() => _AnalysisScreenState();
@@ -128,12 +130,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ),
 
-                // Bottom action bar
-                _BottomBar(
-                  provider: provider,
-                  project:  project,
-                  mode:     mode,
-                ),
+                // Bottom action bar (hidden for imported sessions)
+                if (!widget.isImportedSession)
+                  _BottomBar(
+                    provider: provider,
+                    project:  project,
+                    mode:     mode,
+                  ),
               ],
             ),
     );

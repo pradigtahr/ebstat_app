@@ -70,7 +70,8 @@ class _HomeScreenState extends State<HomeScreen> {
       );
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (_) => const AnalysisScreen()),
+        MaterialPageRoute(
+            builder: (_) => const AnalysisScreen(isImportedSession: true)),
       );
     } on CsvImportException catch (e) {
       if (mounted) _showError(e.message);
