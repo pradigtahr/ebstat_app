@@ -9,6 +9,7 @@ import '../models/voltammetry_mode.dart';
 import '../providers/ble_provider.dart';
 import '../providers/measurement_provider.dart';
 import '../services/csv_import_service.dart';
+import '../services/xlsx_import_service.dart';
 import '../theme/app_theme.dart';
 import 'analysis_screen.dart';
 import 'bluetooth_screen.dart';
@@ -33,7 +34,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['csv'],
+        allowedExtensions: ['csv', 'xlsx'],
         withData: true, // ensure bytes are always loaded, regardless of platform
       );
       if (result == null || result.files.isEmpty || !mounted) return;
@@ -49,7 +50,10 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final project = CsvImportService.importFromBytes(bytes);
+      final isXlsx = file.name.toLowerCase().endsWith('.xlsx');
+      final project = isXlsx
+          ? XlsxImportService.importFromBytes(bytes)
+          : CsvImportService.importFromBytes(bytes);
       final mode = VoltammetryMode.values
           .where((m) => m.abbreviation == project.modeName)
           .firstOrNull;
@@ -74,6 +78,8 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (_) => const AnalysisScreen(isImportedSession: true)),
       );
     } on CsvImportException catch (e) {
+      if (mounted) _showError(e.message);
+    } on XlsxImportException catch (e) {
       if (mounted) _showError(e.message);
     } catch (e) {
       if (mounted) _showError('Import failed: $e');
