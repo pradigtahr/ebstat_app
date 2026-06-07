@@ -47,10 +47,13 @@ class CsvImportService {
 
   /// Parse already-decoded CSV text.
   static ProjectSession importFromContent(String content) {
-    final lines = content
+    var lines = content
         .replaceAll('\r\n', '\n')
         .replaceAll('\r', '\n')
         .split('\n');
+
+    // Detect PalmSens format and normalise to canonical EbStat layout.
+    lines = _detectAndNormalize(lines);
 
     // ── 1. Header metadata ────────────────────────────────────────────────────
     String? technique;
@@ -75,7 +78,7 @@ class CsvImportService {
     }
 
     if (technique == null) {
-      throw const CsvImportException('Not a valid EbStat CSV file');
+      throw const CsvImportException('Unrecognized CSV format');
     }
     if (!_knownTechniques.contains(technique)) {
       throw CsvImportException('Unsupported technique: $technique');
@@ -223,6 +226,75 @@ class CsvImportService {
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
+
+  /// Detects whether [lines] is a canonical EbStat export or a PalmSens export,
+  /// and returns either the original list (canonical) or a normalised list that
+  /// inserts `Technique:,CV` and replaces the comma-only separator with a blank
+  /// line so the main parser can consume both formats without duplication.
+  ///
+  /// Canonical EbStat header (first few lines):
+  ///   Date and time:,<ts>
+  ///   Technique:,CV            ← present
+  ///   Notes:
+  ///   <empty>
+  ///   <series names>…
+  ///
+  /// PalmSens PSTrace CV export header:
+  ///   Date and time:,<ts>
+  ///   Notes:                   ← no Technique line
+  ///   ,,,,,,,,,,,              ← comma-only separator (not empty)
+  ///   <series names>…
+  static List<String> _detectAndNormalize(List<String> lines) {
+    final first5 = lines.take(5).map((l) => l.trim()).toList();
+
+    // Already canonical: a Technique: line exists in the header.
+    if (first5.any((l) => l.startsWith('Technique:'))) return lines;
+
+    // Require at least a date and a notes line to recognise as PalmSens.
+    final hasDate  = first5.any((l) => l.startsWith('Date and time:'));
+    final hasNotes = first5.any((l) => l.startsWith('Notes:'));
+    if (!hasDate || !hasNotes) {
+      throw const CsvImportException('Unrecognized CSV format');
+    }
+
+    // PalmSens detected — synthesise canonical layout in memory:
+    //   Date and time:,<ts>
+    //   Technique:,CV            ← inserted
+    //   Notes:
+    //   <empty line>             ← replaces the comma-only separator
+    //   <series names>…          ← unchanged
+    final result = <String>[];
+    int li = 0;
+
+    // Copy the Date and time line.
+    while (li < lines.length && !lines[li].trim().startsWith('Date and time:')) {
+      li++;
+    }
+    if (li < lines.length) result.add(lines[li++]);
+
+    result.add('Technique:,CV');
+
+    // Copy the Notes line (may have leading whitespace).
+    if (li < lines.length && lines[li].trim().startsWith('Notes:')) {
+      result.add(lines[li++]);
+    } else {
+      result.add('Notes:');
+    }
+
+    // Skip the PalmSens comma-only separator; emit a true blank line instead.
+    if (li < lines.length) {
+      final trimmed = lines[li].trim();
+      if (trimmed.isEmpty || trimmed.replaceAll(',', '').isEmpty) li++;
+    }
+    result.add('');
+
+    // All remaining rows (series names, timestamps, units, data) pass through.
+    while (li < lines.length) {
+      result.add(lines[li++]);
+    }
+
+    return result;
+  }
 
   static List<String> _parseCsvLine(String line) {
     final result = <String>[];
