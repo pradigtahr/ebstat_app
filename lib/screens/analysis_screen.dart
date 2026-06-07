@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/project_session.dart';
+import '../services/peak_finder.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
 import '../services/palmsens_csv_service.dart';
@@ -36,6 +37,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   final Set<String> _hiddenCycles       = {}; // "measIdx:cycleNum"
   bool _showSg = true;
 
+  List<PeakResult> _detectedPeaks = [];
+  ProjectSession?  _lastProjectRef;
+  String?          _lastTechnique;
+
   String _cycleKey(int mIdx, int cNum) => '$mIdx:$cNum';
 
   bool _isMeasHidden(int i) => _hiddenMeasurements.contains(i);
@@ -51,6 +56,63 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         _hiddenCycles.contains(k) ? _hiddenCycles.remove(k) : _hiddenCycles.add(k);
       });
 
+  // ── Peak detection helpers ─────────────────────────────────────────────────
+
+  void _maybeRedetect(ProjectSession? project, String? technique) {
+    if (project == null || technique == null) return;
+    if (identical(project, _lastProjectRef) && technique == _lastTechnique) return;
+    _lastProjectRef = project;
+    _lastTechnique  = technique;
+    final fresh = <PeakResult>[];
+    for (int i = 0; i < project.measurements.length; i++) {
+      fresh.addAll(PeakFinder.analyze(project.measurements[i], i, technique));
+    }
+    // Preserve manual overrides
+    _detectedPeaks = fresh.map((newPk) {
+      return _detectedPeaks.firstWhere(
+        (old) => old.measurementIdx == newPk.measurementIdx &&
+                  old.cycleNum == newPk.cycleNum &&
+                  old.label == newPk.label &&
+                  !old.isAuto,
+        orElse: () => newPk,
+      );
+    }).toList();
+  }
+
+  void _replacePeak(PeakResult updated) {
+    setState(() {
+      final idx = _detectedPeaks.indexWhere((p) =>
+          p.measurementIdx == updated.measurementIdx &&
+          p.cycleNum == updated.cycleNum &&
+          p.label == updated.label);
+      if (idx >= 0) _detectedPeaks[idx] = updated;
+    });
+  }
+
+  void _showPeakEditSheet(BuildContext context, PeakResult peak,
+      ProjectSession project, String technique) {
+    final session = project.measurements[peak.measurementIdx];
+    final seriesPts = (peak.cycleNum != null
+        ? session.points.where((p) => p.cycle == peak.cycleNum).toList()
+        : session.points);
+    final xV  = seriesPts.map((p) => p.x / 1000).toList();
+    final yUa = seriesPts.map((p) => p.y / 1000).toList();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => _PeakEditSheet(
+        peak: peak,
+        xV: xV,
+        yUa: yUa,
+        onApply: _replacePeak,
+      ),
+    );
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -60,6 +122,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final mode     = provider.selectedMode;
     final isCv     = mode == VoltammetryMode.cv;
     final hasSg    = project?.measurements.any((s) => s.hasSgData) ?? false;
+
+    _maybeRedetect(project, mode?.abbreviation);
 
     return Scaffold(
       appBar: AppBar(
@@ -105,11 +169,21 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                       yLabel: mode?.yAxisLabel ?? 'Current (nA)',
                       onPointTapped: (measIdx, ptIdx) =>
                           _showAnnotationSheet(context, measIdx, ptIdx, project),
+                      detectedPeaks: _detectedPeaks,
                     ),
                   ),
                 ),
 
-                // Peak annotations strip
+                // Auto-detected peaks panel
+                if (_detectedPeaks.isNotEmpty)
+                  _DetectedPeakPanel(
+                    peaks:   _detectedPeaks,
+                    project: project,
+                    onEdit:  (peak) => _showPeakEditSheet(
+                        context, peak, project, mode?.abbreviation ?? ''),
+                  ),
+
+                // Manual peak annotations strip
                 if (project.peaks.isNotEmpty)
                   _PeakStrip(project: project, provider: provider),
 
@@ -282,6 +356,7 @@ class _OverlayChart extends StatelessWidget {
     required this.xLabel,
     required this.yLabel,
     required this.onPointTapped,
+    required this.detectedPeaks,
   });
 
   final ProjectSession project;
@@ -292,12 +367,16 @@ class _OverlayChart extends StatelessWidget {
   final String xLabel;
   final String yLabel;
   final void Function(int measIdx, int ptIdx) onPointTapped;
+  final List<PeakResult> detectedPeaks;
 
   @override
   Widget build(BuildContext context) {
     final barMetas = <_BarMeta>[];
     final bars     = <LineChartBarData>[];
     final peaks    = project.peaks;
+
+    // Color map: "$mIdx:$cNum" (CV) or "$mIdx" (non-CV) → assigned color
+    final seriesColorMap = <String, Color>{};
 
     // Assign a global color index incremented across all (meas, cycle) pairs
     int globalColorIdx = 0;
@@ -325,6 +404,7 @@ class _OverlayChart extends StatelessWidget {
           }
 
           final color = kCycleColors[globalColorIdx % kCycleColors.length];
+          seriesColorMap['$mIdx:$cNum'] = color;
           final peaksForMeas = peaks.where((p) => p.measurementIndex == mIdx);
 
           bars.add(LineChartBarData(
@@ -395,6 +475,7 @@ class _OverlayChart extends StatelessWidget {
         if (session.points.isEmpty) { globalColorIdx++; continue; }
         final color =
             kCycleColors[globalColorIdx % kCycleColors.length];
+        seriesColorMap['$mIdx'] = color;
         final peaksForMeas =
             peaks.where((p) => p.measurementIndex == mIdx).toList();
         final indices =
@@ -434,6 +515,73 @@ class _OverlayChart extends StatelessWidget {
         barMetas.add(_BarMeta(mIdx, null, indices));
         globalColorIdx++;
       }
+    }
+
+    // ── Peak overlays: baseline line + ip vertical line ─────────────────────
+    for (final pk in detectedPeaks) {
+      if (hiddenMeasurements.contains(pk.measurementIdx)) continue;
+      if (pk.cycleNum != null &&
+          hiddenCycles.contains('${pk.measurementIdx}:${pk.cycleNum}')) continue;
+
+      final colorKey = pk.cycleNum != null
+          ? '${pk.measurementIdx}:${pk.cycleNum}'
+          : '${pk.measurementIdx}';
+      final pkColor = seriesColorMap[colorKey];
+      if (pkColor == null) continue;
+
+      final session = project.measurements[pk.measurementIdx];
+      final seriesPts = pk.cycleNum != null
+          ? session.points.where((p) => p.cycle == pk.cycleNum).toList()
+          : session.points;
+      if (seriesPts.isEmpty) continue;
+      final spn = seriesPts.length;
+      final apexIdx = pk.apexIndex.clamp(0, spn - 1);
+
+      // Baseline in chart coords (mV/nA):
+      //   y_nA = slope(µA/V) * x_mV + intercept(µA)*1000
+      //   (numerically slope µA/V == nA/mV)
+      double blY(double xMv) =>
+          pk.baselineSlope * xMv + pk.baselineIntercept * 1000;
+
+      // Baseline line from (fitLo-3) to (apex+8)
+      final blStart = max(0, pk.fitLo - 3);
+      final blEnd   = min(spn - 1, apexIdx + 8);
+      final blSpots = <FlSpot>[
+        for (int i = blStart; i <= blEnd; i++)
+          FlSpot(seriesPts[i].x, blY(seriesPts[i].x)),
+      ];
+      if (blSpots.length >= 2) {
+        bars.add(LineChartBarData(
+          spots: blSpots,
+          isCurved: false,
+          color: pkColor.withOpacity(0.55),
+          barWidth: 1.5,
+          dashArray: [5, 4],
+          dotData: const FlDotData(show: false),
+        ));
+        barMetas.add(_BarMeta(pk.measurementIdx, pk.cycleNum, []));
+      }
+
+      // ip vertical line from baseline to apex
+      final apexXmV = seriesPts[apexIdx].x;
+      final apexYnA = seriesPts[apexIdx].y;
+      final baselineAtApex = blY(apexXmV);
+      bars.add(LineChartBarData(
+        spots: [FlSpot(apexXmV, baselineAtApex), FlSpot(apexXmV, apexYnA)],
+        isCurved: false,
+        color: pkColor,
+        barWidth: 2.0,
+        dotData: FlDotData(
+          show: true,
+          getDotPainter: (spot, _, __, idx) => FlDotCirclePainter(
+            radius: idx == 1 ? 5.5 : 3.0,
+            color: idx == 1 ? pkColor : pkColor.withOpacity(0.55),
+            strokeColor: Colors.white,
+            strokeWidth: 1.0,
+          ),
+        ),
+      ));
+      barMetas.add(_BarMeta(pk.measurementIdx, pk.cycleNum, []));
     }
 
     if (bars.isEmpty) {
@@ -859,6 +1007,275 @@ class _BottomBar extends StatelessWidget {
       builder: (ctx) => _ExportSheet(project: project, mode: mode),
     );
   }
+}
+
+// ── Detected peaks panel ──────────────────────────────────────────────────────
+class _DetectedPeakPanel extends StatelessWidget {
+  const _DetectedPeakPanel({
+    required this.peaks,
+    required this.project,
+    required this.onEdit,
+  });
+
+  final List<PeakResult> peaks;
+  final ProjectSession   project;
+  final void Function(PeakResult) onEdit;
+
+  static const _hdr  = TextStyle(
+      color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.w600);
+  static const _cell = TextStyle(color: Colors.white70, fontSize: 11);
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 156),
+      decoration: const BoxDecoration(
+        color: AppColors.primary,
+        border: Border(
+          top:    BorderSide(color: AppColors.divider),
+          bottom: BorderSide(color: AppColors.divider),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+            child: Row(children: [
+              const Text('AUTO-DETECTED PEAKS',
+                  style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.8)),
+              const Spacer(),
+              Text('${peaks.length} found',
+                  style: const TextStyle(
+                      color: AppColors.textSecondary, fontSize: 10)),
+            ]),
+          ),
+          // Column headers
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(children: const [
+              SizedBox(width: 110, child: Text('Series',   style: _hdr)),
+              SizedBox(width: 115, child: Text('Label',    style: _hdr)),
+              SizedBox(width: 68,  child: Text('Ep (V)',   style: _hdr)),
+              SizedBox(width: 68,  child: Text('ip (µA)',  style: _hdr)),
+              SizedBox(width: 48,  child: Text('Mode',     style: _hdr)),
+            ]),
+          ),
+          // Rows
+          Flexible(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              itemCount: peaks.length,
+              itemBuilder: (_, i) {
+                final pk      = peaks[i];
+                final session = project.measurements[pk.measurementIdx];
+                final seriesLabel = pk.cycleNum != null
+                    ? '${session.displayName} C${pk.cycleNum}'
+                    : session.displayName;
+                return InkWell(
+                  onTap: () => onEdit(pk),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        vertical: 3, horizontal: 4),
+                    child: Row(children: [
+                      SizedBox(
+                          width: 110,
+                          child: Text(seriesLabel,
+                              style: _cell, overflow: TextOverflow.ellipsis)),
+                      SizedBox(
+                          width: 115,
+                          child: Text(pk.label,
+                              style: _cell, overflow: TextOverflow.ellipsis)),
+                      SizedBox(
+                          width: 68,
+                          child: Text(pk.ep.toStringAsFixed(3), style: _cell)),
+                      SizedBox(
+                          width: 68,
+                          child: Text(pk.ip.toStringAsFixed(2), style: _cell)),
+                      SizedBox(
+                          width: 48,
+                          child: Text(pk.isAuto ? 'Auto' : 'Manual',
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: pk.isAuto
+                                      ? AppColors.accent1
+                                      : AppColors.accent2))),
+                    ]),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Peak manual-edit sheet ────────────────────────────────────────────────────
+class _PeakEditSheet extends StatefulWidget {
+  const _PeakEditSheet({
+    required this.peak,
+    required this.xV,
+    required this.yUa,
+    required this.onApply,
+  });
+
+  final PeakResult peak;
+  final List<double> xV;
+  final List<double> yUa;
+  final void Function(PeakResult) onApply;
+
+  @override
+  State<_PeakEditSheet> createState() => _PeakEditSheetState();
+}
+
+class _PeakEditSheetState extends State<_PeakEditSheet> {
+  late int _apexIdx;
+  late int _fitLo;
+  late int _fitHi;
+  late PeakResult _preview;
+
+  @override
+  void initState() {
+    super.initState();
+    _apexIdx = widget.peak.apexIndex;
+    _fitLo   = widget.peak.fitLo;
+    _fitHi   = widget.peak.fitHi;
+    _preview = widget.peak;
+  }
+
+  void _recompute() {
+    final updated = PeakFinder.recompute(
+      widget.peak.copyWith(
+        apexIndex: _apexIdx,
+        fitLo:     _fitLo,
+        fitHi:     _fitHi,
+      ),
+      widget.xV,
+      widget.yUa,
+    );
+    setState(() => _preview = updated);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final n = widget.xV.length;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(
+          24, 20, 24, 24 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(widget.peak.label,
+              style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(
+            'Ep = ${_preview.ep.toStringAsFixed(4)} V   '
+            'ip = ${_preview.ip.toStringAsFixed(4)} µA',
+            style: const TextStyle(color: AppColors.accent1, fontSize: 13),
+          ),
+          const SizedBox(height: 16),
+          _SliderRow(
+            label:     'Apex index',
+            value:     _apexIdx,
+            min:       0,
+            max:       n - 1,
+            onChanged: (v) { setState(() { _apexIdx = v; _recompute(); }); },
+          ),
+          _SliderRow(
+            label:     'Baseline start',
+            value:     _fitLo,
+            min:       0,
+            max:       n - 2,
+            onChanged: (v) {
+              setState(() {
+                _fitLo = v;
+                if (_fitHi <= _fitLo) _fitHi = _fitLo + 1;
+                _recompute();
+              });
+            },
+          ),
+          _SliderRow(
+            label:     'Baseline end',
+            value:     _fitHi,
+            min:       _fitLo + 1,
+            max:       n - 1,
+            onChanged: (v) { setState(() { _fitHi = v; _recompute(); }); },
+          ),
+          const SizedBox(height: 20),
+          Row(children: [
+            OutlinedButton(
+              onPressed: () {
+                widget.onApply(widget.peak.copyWith(isAuto: true));
+                Navigator.pop(context);
+              },
+              child: const Text('Reset Auto'),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: ElevatedButton(
+                onPressed: () {
+                  widget.onApply(_preview);
+                  Navigator.pop(context);
+                },
+                child: const Text('Apply'),
+              ),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  const _SliderRow({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
+
+  final String label;
+  final int    value;
+  final int    min;
+  final int    max;
+  final void Function(int) onChanged;
+
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        SizedBox(
+          width: 110,
+          child: Text('$label:',
+              style: const TextStyle(color: Colors.white70, fontSize: 12)),
+        ),
+        Expanded(
+          child: Slider(
+            value: value.toDouble(),
+            min:   min.toDouble(),
+            max:   max.toDouble(),
+            divisions: max > min ? max - min : null,
+            onChanged: (v) => onChanged(v.round()),
+            activeColor: AppColors.accent1,
+          ),
+        ),
+        SizedBox(
+          width: 36,
+          child: Text('$value',
+              style: const TextStyle(color: Colors.white, fontSize: 11)),
+        ),
+      ]);
 }
 
 // ── Export CSV sheet ──────────────────────────────────────────────────────────
