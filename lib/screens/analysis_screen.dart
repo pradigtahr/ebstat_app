@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -38,10 +40,23 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   bool _showSg = true;
 
   List<PeakResult> _detectedPeaks = [];
+  /// Snapshot of the very first auto-detection on this data — used by "Reset".
+  List<PeakResult> _initialPeaks  = [];
+  /// Live preview of a peak currently being edited in the bottom sheet.
+  PeakResult?      _previewPeak;
   ProjectSession?  _lastProjectRef;
   String?          _lastTechnique;
 
+  /// Key for capturing the chart as a PNG image.
+  final GlobalKey _chartKey = GlobalKey();
+
   String _cycleKey(int mIdx, int cNum) => '$mIdx:$cNum';
+
+  /// Two peak results identify the same series/cycle/branch.
+  static bool _samePeak(PeakResult a, PeakResult b) =>
+      a.measurementIdx == b.measurementIdx &&
+      a.cycleNum == b.cycleNum &&
+      a.label == b.label;
 
   bool _isMeasHidden(int i) => _hiddenMeasurements.contains(i);
   bool _isCycleHidden(int m, int c) =>
@@ -67,16 +82,25 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     for (int i = 0; i < project.measurements.length; i++) {
       fresh.addAll(PeakFinder.analyze(project.measurements[i], i, technique));
     }
+    // Snapshot the first auto-detection for this data — "Reset" restores from it.
+    _initialPeaks = List<PeakResult>.from(fresh);
     // Preserve manual overrides
     _detectedPeaks = fresh.map((newPk) {
       return _detectedPeaks.firstWhere(
-        (old) => old.measurementIdx == newPk.measurementIdx &&
-                  old.cycleNum == newPk.cycleNum &&
-                  old.label == newPk.label &&
-                  !old.isAuto,
+        (old) => _samePeak(old, newPk) && !old.isAuto,
         orElse: () => newPk,
       );
     }).toList();
+  }
+
+  /// The peaks the chart should render: detected peaks with the live edit
+  /// preview substituted in for the peak currently being edited (if any).
+  List<PeakResult> get _effectivePeaks {
+    final preview = _previewPeak;
+    if (preview == null) return _detectedPeaks;
+    return _detectedPeaks
+        .map((p) => _samePeak(p, preview) ? preview : p)
+        .toList();
   }
 
   void _replacePeak(PeakResult updated) {
@@ -98,6 +122,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final xV  = seriesPts.map((p) => p.x / 1000).toList();
     final yUa = seriesPts.map((p) => p.y / 1000).toList();
 
+    // Original auto-detected snapshot used by "Reset".
+    final initial = _initialPeaks.firstWhere(
+      (p) => _samePeak(p, peak),
+      orElse: () => peak,
+    );
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -106,11 +136,74 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
       builder: (_) => _PeakEditSheet(
         peak: peak,
+        initialPeak: initial,
         xV: xV,
         yUa: yUa,
+        onPreview: (p) => setState(() => _previewPeak = p),
         onApply: _replacePeak,
       ),
-    );
+    ).whenComplete(() {
+      // Clear the live preview; reverts to the committed value if not applied.
+      if (mounted) setState(() => _previewPeak = null);
+    });
+  }
+
+  // ── Save chart image ───────────────────────────────────────────────────────
+
+  Future<void> _saveChartImage() async {
+    final mode = context.read<MeasurementProvider>().selectedMode;
+    final tech = mode?.abbreviation ?? 'EbStat';
+    try {
+      final boundary = _chartKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) {
+        _snack('Chart not ready to capture.');
+        return;
+      }
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        _snack('Failed to capture chart image.');
+        return;
+      }
+      final pngBytes = byteData.buffer.asUint8List();
+
+      final fileName = 'EbStat_${tech}_${_imgTimestamp(DateTime.now())}.png';
+      Directory dir =
+          await getApplicationDocumentsDirectory();
+      try {
+        final ext = await getExternalStorageDirectory();
+        if (ext != null) dir = ext;
+      } catch (_) {/* keep documents dir */}
+      final picsDir = Directory('${dir.path}/Pictures');
+      if (!await picsDir.exists()) await picsDir.create(recursive: true);
+      final file = File('${picsDir.path}/$fileName');
+      await file.writeAsBytes(pngBytes);
+
+      if (mounted) _snack('Saved $fileName');
+
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path, mimeType: 'image/png')],
+          subject: fileName,
+        ),
+      );
+    } catch (e) {
+      if (mounted) _snack('Save failed: $e');
+    }
+  }
+
+  static String _imgTimestamp(DateTime dt) {
+    String p(int v, [int w = 2]) => v.toString().padLeft(w, '0');
+    return '${p(dt.year, 4)}${p(dt.month)}${p(dt.day)}_'
+        '${p(dt.hour)}${p(dt.minute)}${p(dt.second)}';
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -148,6 +241,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
               ],
             ),
+          if (project != null && project.measurements.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.save_alt),
+              tooltip: 'Save chart image',
+              onPressed: _saveChartImage,
+            ),
         ],
       ),
       body: project == null || project.measurements.isEmpty
@@ -156,32 +255,29 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
               children: [
                 // Chart
                 Expanded(
-                  flex: 5,
+                  flex: 6,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 8, 16, 0),
-                    child: _OverlayChart(
-                      project:            project,
-                      hiddenMeasurements: _hiddenMeasurements,
-                      hiddenCycles:       _hiddenCycles,
-                      isCv:               isCv,
-                      showSg:             _showSg,
-                      xLabel: mode?.xAxisLabel ?? 'Potential (mV)',
-                      yLabel: mode?.yAxisLabel ?? 'Current (nA)',
-                      onPointTapped: (measIdx, ptIdx) =>
-                          _showAnnotationSheet(context, measIdx, ptIdx, project),
-                      detectedPeaks: _detectedPeaks,
+                    padding: const EdgeInsets.fromLTRB(8, 10, 12, 4),
+                    child: RepaintBoundary(
+                      key: _chartKey,
+                      child: _OverlayChart(
+                        project:            project,
+                        hiddenMeasurements: _hiddenMeasurements,
+                        hiddenCycles:       _hiddenCycles,
+                        isCv:               isCv,
+                        showSg:             _showSg,
+                        xLabel: mode?.xAxisLabel ?? 'Potential (mV)',
+                        yLabel: mode?.yAxisLabel ?? 'Current (nA)',
+                        onPointTapped: (measIdx, ptIdx) =>
+                            _showAnnotationSheet(
+                                context, measIdx, ptIdx, project),
+                        detectedPeaks: _effectivePeaks,
+                        onEditPeak: (peak) => _showPeakEditSheet(
+                            context, peak, project, mode?.abbreviation ?? ''),
+                      ),
                     ),
                   ),
                 ),
-
-                // Auto-detected peaks panel
-                if (_detectedPeaks.isNotEmpty)
-                  _DetectedPeakPanel(
-                    peaks:   _detectedPeaks,
-                    project: project,
-                    onEdit:  (peak) => _showPeakEditSheet(
-                        context, peak, project, mode?.abbreviation ?? ''),
-                  ),
 
                 // Manual peak annotations strip
                 if (project.peaks.isNotEmpty)
@@ -346,6 +442,19 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 }
 
 // ── Overlay chart ─────────────────────────────────────────────────────────────
+
+// Chart plot-area insets. These MUST match the titlesData reserved sizes below
+// so the bubble overlay can map data coordinates to pixels accurately.
+const double _kAxisNameSize  = 16;
+const double _kLeftReserved  = 56;
+const double _kBottomReserved = 30;
+const double _kTopReserved    = 16;
+const double _kRightReserved  = 24;
+const double _kLeftInset   = _kLeftReserved + _kAxisNameSize;   // 72
+const double _kBottomInset = _kBottomReserved + _kAxisNameSize; // 46
+const double _kTopInset    = _kTopReserved;                     // 16
+const double _kRightInset  = _kRightReserved;                   // 24
+
 class _OverlayChart extends StatelessWidget {
   const _OverlayChart({
     required this.project,
@@ -357,6 +466,7 @@ class _OverlayChart extends StatelessWidget {
     required this.yLabel,
     required this.onPointTapped,
     required this.detectedPeaks,
+    required this.onEditPeak,
   });
 
   final ProjectSession project;
@@ -368,12 +478,17 @@ class _OverlayChart extends StatelessWidget {
   final String yLabel;
   final void Function(int measIdx, int ptIdx) onPointTapped;
   final List<PeakResult> detectedPeaks;
+  final void Function(PeakResult peak) onEditPeak;
 
   @override
   Widget build(BuildContext context) {
     final barMetas = <_BarMeta>[];
     final bars     = <LineChartBarData>[];
     final peaks    = project.peaks;
+    // Bar index → detected peak (the ip vertical line), for tap-to-edit.
+    final peakBarIndex = <int, PeakResult>{};
+    // Callout bubble specs drawn by the overlay painter.
+    final bubbleSpecs  = <_BubbleSpec>[];
 
     // Color map: "$mIdx:$cNum" (CV) or "$mIdx" (non-CV) → assigned color
     final seriesColorMap = <String, Color>{};
@@ -566,6 +681,7 @@ class _OverlayChart extends StatelessWidget {
       final apexXmV = seriesPts[apexIdx].x;
       final apexYnA = seriesPts[apexIdx].y;
       final baselineAtApex = blY(apexXmV);
+      final ipBarIdx = bars.length;
       bars.add(LineChartBarData(
         spots: [FlSpot(apexXmV, baselineAtApex), FlSpot(apexXmV, apexYnA)],
         isCurved: false,
@@ -582,6 +698,26 @@ class _OverlayChart extends StatelessWidget {
         ),
       ));
       barMetas.add(_BarMeta(pk.measurementIdx, pk.cycleNum, []));
+      peakBarIndex[ipBarIdx] = pk;
+
+      // Manga-style callout bubble anchored at the apex.
+      final isCathodic = pk.label.toLowerCase().contains('cathodic');
+      final shortLabel = pk.label.toLowerCase().contains('anodic')
+          ? 'Anodic (ipa)'
+          : isCathodic
+              ? 'Cathodic (ipc)'
+              : 'Peak';
+      bubbleSpecs.add(_BubbleSpec(
+        apexX: apexXmV,
+        apexY: apexYnA,
+        color: pkColor,
+        preferUp: !isCathodic,
+        lines: [
+          shortLabel,
+          'Ep = ${pk.ep.toStringAsFixed(3)} V',
+          'ip = ${pk.ip.toStringAsFixed(1)} µA',
+        ],
+      ));
     }
 
     if (bars.isEmpty) {
@@ -598,10 +734,15 @@ class _OverlayChart extends StatelessWidget {
     final maxX = xs.reduce(max);
     final minY = ys.reduce(min);
     final maxY = ys.reduce(max);
-    final xPad = max((maxX - minX) * 0.05, 1.0);
-    final yPad = max((maxY - minY) * 0.1, 0.1);
+    final xPad = max((maxX - minX) * 0.08, 1.0);
+    final yPad = max((maxY - minY) * 0.12, 0.1);
 
-    return LineChart(
+    final minXEff = minX - xPad;
+    final maxXEff = maxX + xPad;
+    final minYEff = minY - yPad;
+    final maxYEff = maxY + yPad;
+
+    final chart = LineChart(
       LineChartData(
         backgroundColor: AppColors.cardBg,
         clipData: const FlClipData.all(),
@@ -616,38 +757,52 @@ class _OverlayChart extends StatelessWidget {
             show: true, border: Border.all(color: AppColors.divider)),
         titlesData: FlTitlesData(
           leftTitles: AxisTitles(
+            axisNameSize: _kAxisNameSize,
             axisNameWidget: Text(yLabel,
                 style: const TextStyle(
                     color: AppColors.textSecondary, fontSize: 11)),
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: 46,
+              reservedSize: _kLeftReserved,
               getTitlesWidget: (v, _) => Text(v.toStringAsFixed(1),
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 10)),
             ),
           ),
           bottomTitles: AxisTitles(
+            axisNameSize: _kAxisNameSize,
             axisNameWidget: Text(xLabel,
                 style: const TextStyle(
                     color: AppColors.textSecondary, fontSize: 11)),
             sideTitles: SideTitles(
               showTitles: true,
-              reservedSize: 28,
+              reservedSize: _kBottomReserved,
               getTitlesWidget: (v, _) => Text(v.toStringAsFixed(0),
                   style: const TextStyle(
                       color: AppColors.textSecondary, fontSize: 10)),
             ),
           ),
+          // Empty top/right gutters reserve space so axis-edge labels (and the
+          // bubble overlay) are never clipped on common phone widths.
           rightTitles: const AxisTitles(
-              sideTitles: SideTitles(showTitles: false)),
-          topTitles:
-              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: _kRightReserved,
+              getTitlesWidget: _emptyTitle,
+            ),
+          ),
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: _kTopReserved,
+              getTitlesWidget: _emptyTitle,
+            ),
+          ),
         ),
-        minX: minX - xPad,
-        maxX: maxX + xPad,
-        minY: minY - yPad,
-        maxY: maxY + yPad,
+        minX: minXEff,
+        maxX: maxXEff,
+        minY: minYEff,
+        maxY: maxYEff,
         lineTouchData: LineTouchData(
           handleBuiltInTouches: true,
           touchCallback: (event, response) {
@@ -655,9 +810,15 @@ class _OverlayChart extends StatelessWidget {
                 response?.lineBarSpots != null &&
                 response!.lineBarSpots!.isNotEmpty) {
               final spot = response.lineBarSpots!.first;
+              // Tapping a detected-peak marker opens its editor.
+              final pk = peakBarIndex[spot.barIndex];
+              if (pk != null) {
+                onEditPeak(pk);
+                return;
+              }
               if (spot.barIndex >= barMetas.length) return;
               final meta = barMetas[spot.barIndex];
-              if (meta.pointIndices.isEmpty) return; // SG bar
+              if (meta.pointIndices.isEmpty) return; // SG / overlay bar
               final spotIdx = spot.spotIndex;
               if (spotIdx >= meta.pointIndices.length) return;
               final origIdx = meta.pointIndices[spotIdx];
@@ -690,7 +851,173 @@ class _OverlayChart extends StatelessWidget {
       ),
       duration: Duration.zero,
     );
+
+    // Overlay the manga-style callout bubbles on top of the chart.
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        chart,
+        if (bubbleSpecs.isNotEmpty)
+          IgnorePointer(
+            child: CustomPaint(
+              painter: _PeakBubblePainter(
+                specs: bubbleSpecs,
+                minX: minXEff,
+                maxX: maxXEff,
+                minY: minYEff,
+                maxY: maxYEff,
+              ),
+            ),
+          ),
+      ],
+    );
   }
+}
+
+/// Empty title widget used to reserve top/right gutters without drawing labels.
+Widget _emptyTitle(double value, TitleMeta meta) => const SizedBox.shrink();
+
+/// Clamp that tolerates inverted bounds (returns [lo] when [hi] < [lo]).
+double _safeClamp(double v, double lo, double hi) =>
+    hi < lo ? lo : v.clamp(lo, hi);
+
+// ── Peak callout bubble painter ───────────────────────────────────────────────
+class _BubbleSpec {
+  final double apexX; // mV (or ms / data-x)
+  final double apexY; // nA
+  final Color  color;
+  final bool   preferUp; // anodic above-right, cathodic below-left
+  final List<String> lines;
+  const _BubbleSpec({
+    required this.apexX,
+    required this.apexY,
+    required this.color,
+    required this.preferUp,
+    required this.lines,
+  });
+}
+
+class _PeakBubblePainter extends CustomPainter {
+  _PeakBubblePainter({
+    required this.specs,
+    required this.minX,
+    required this.maxX,
+    required this.minY,
+    required this.maxY,
+  });
+
+  final List<_BubbleSpec> specs;
+  final double minX, maxX, minY, maxY;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final left   = _kLeftInset;
+    final top    = _kTopInset;
+    final right  = size.width - _kRightInset;
+    final bottom = size.height - _kBottomInset;
+    final plotW  = right - left;
+    final plotH  = bottom - top;
+    if (plotW <= 0 || plotH <= 0) return;
+    if (maxX - minX == 0 || maxY - minY == 0) return;
+
+    double mapX(double x) => left + (x - minX) / (maxX - minX) * plotW;
+    double mapY(double y) => top + (maxY - y) / (maxY - minY) * plotH;
+
+    final placed = <Rect>[];
+
+    for (final spec in specs) {
+      final apex = Offset(mapX(spec.apexX), mapY(spec.apexY));
+
+      // Build the text block.
+      final tp = TextPainter(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: spec.lines.first,
+              style: TextStyle(
+                color: spec.color,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            TextSpan(
+              text: '\n${spec.lines.skip(1).join('\n')}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 10.5,
+                height: 1.25,
+              ),
+            ),
+          ],
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+      const padH = 7.0, padV = 5.0;
+      final bw = tp.width + padH * 2;
+      final bh = tp.height + padV * 2;
+
+      // Initial desired position relative to the apex.
+      const gap = 16.0;
+      double bx = spec.preferUp ? apex.dx + gap : apex.dx - gap - bw;
+      double by = spec.preferUp ? apex.dy - gap - bh : apex.dy + gap;
+
+      // Clamp inside the plotting rectangle (guard against bubbles larger
+      // than the plot, which would invert the clamp bounds).
+      bx = _safeClamp(bx, left + 2, right - bw - 2);
+      by = _safeClamp(by, top + 2, bottom - bh - 2);
+
+      // Simple vertical collision avoidance against earlier bubbles.
+      var rect = Rect.fromLTWH(bx, by, bw, bh);
+      int guard = 0;
+      while (placed.any((r) => r.overlaps(rect.inflate(2))) && guard < 12) {
+        by += spec.preferUp ? -(bh + 6) : (bh + 6);
+        by = _safeClamp(by, top + 2, bottom - bh - 2);
+        rect = Rect.fromLTWH(bx, by, bw, bh);
+        guard++;
+      }
+      placed.add(rect);
+
+      // Leader line from the bubble edge to the apex marker.
+      final anchor = Offset(
+        apex.dx.clamp(rect.left, rect.right),
+        apex.dy.clamp(rect.top, rect.bottom),
+      );
+      final leaderPaint = Paint()
+        ..color = spec.color.withOpacity(0.9)
+        ..strokeWidth = 1.4
+        ..style = PaintingStyle.stroke;
+      canvas.drawLine(anchor, apex, leaderPaint);
+
+      // Apex marker dot.
+      canvas.drawCircle(
+          apex, 3.0, Paint()..color = spec.color);
+      canvas.drawCircle(
+          apex,
+          3.0,
+          Paint()
+            ..color = Colors.white
+            ..strokeWidth = 1.0
+            ..style = PaintingStyle.stroke);
+
+      // Bubble body.
+      final rrect =
+          RRect.fromRectAndRadius(rect, const Radius.circular(7));
+      canvas.drawRRect(
+          rrect, Paint()..color = const Color(0xFF111C38).withOpacity(0.92));
+      canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color = spec.color
+            ..strokeWidth = 1.4
+            ..style = PaintingStyle.stroke);
+
+      tp.paint(canvas, Offset(rect.left + padH, rect.top + padV));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _PeakBubblePainter old) => true;
 }
 
 // ── Peak annotations strip ────────────────────────────────────────────────────
@@ -815,9 +1142,7 @@ class _MeasurementTree extends StatelessWidget {
               tilePadding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
               leading: Icon(
-                isHidden
-                    ? Icons.visibility_off_outlined
-                    : Icons.expand_more,
+                Icons.expand_more,
                 color: isHidden
                     ? AppColors.textSecondary
                     : AppColors.accent2,
@@ -1009,126 +1334,25 @@ class _BottomBar extends StatelessWidget {
   }
 }
 
-// ── Detected peaks panel ──────────────────────────────────────────────────────
-class _DetectedPeakPanel extends StatelessWidget {
-  const _DetectedPeakPanel({
-    required this.peaks,
-    required this.project,
-    required this.onEdit,
-  });
-
-  final List<PeakResult> peaks;
-  final ProjectSession   project;
-  final void Function(PeakResult) onEdit;
-
-  static const _hdr  = TextStyle(
-      color: AppColors.textSecondary, fontSize: 10, fontWeight: FontWeight.w600);
-  static const _cell = TextStyle(color: Colors.white70, fontSize: 11);
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      constraints: const BoxConstraints(maxHeight: 156),
-      decoration: const BoxDecoration(
-        color: AppColors.primary,
-        border: Border(
-          top:    BorderSide(color: AppColors.divider),
-          bottom: BorderSide(color: AppColors.divider),
-        ),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-            child: Row(children: [
-              const Text('AUTO-DETECTED PEAKS',
-                  style: TextStyle(
-                      color: AppColors.textSecondary,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.8)),
-              const Spacer(),
-              Text('${peaks.length} found',
-                  style: const TextStyle(
-                      color: AppColors.textSecondary, fontSize: 10)),
-            ]),
-          ),
-          // Column headers
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(children: const [
-              SizedBox(width: 110, child: Text('Series',   style: _hdr)),
-              SizedBox(width: 115, child: Text('Label',    style: _hdr)),
-              SizedBox(width: 68,  child: Text('Ep (V)',   style: _hdr)),
-              SizedBox(width: 68,  child: Text('ip (µA)',  style: _hdr)),
-              SizedBox(width: 48,  child: Text('Mode',     style: _hdr)),
-            ]),
-          ),
-          // Rows
-          Flexible(
-            child: ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              itemCount: peaks.length,
-              itemBuilder: (_, i) {
-                final pk      = peaks[i];
-                final session = project.measurements[pk.measurementIdx];
-                final seriesLabel = pk.cycleNum != null
-                    ? '${session.displayName} C${pk.cycleNum}'
-                    : session.displayName;
-                return InkWell(
-                  onTap: () => onEdit(pk),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 3, horizontal: 4),
-                    child: Row(children: [
-                      SizedBox(
-                          width: 110,
-                          child: Text(seriesLabel,
-                              style: _cell, overflow: TextOverflow.ellipsis)),
-                      SizedBox(
-                          width: 115,
-                          child: Text(pk.label,
-                              style: _cell, overflow: TextOverflow.ellipsis)),
-                      SizedBox(
-                          width: 68,
-                          child: Text(pk.ep.toStringAsFixed(3), style: _cell)),
-                      SizedBox(
-                          width: 68,
-                          child: Text(pk.ip.toStringAsFixed(2), style: _cell)),
-                      SizedBox(
-                          width: 48,
-                          child: Text(pk.isAuto ? 'Auto' : 'Manual',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  color: pk.isAuto
-                                      ? AppColors.accent1
-                                      : AppColors.accent2))),
-                    ]),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ── Peak manual-edit sheet ────────────────────────────────────────────────────
 class _PeakEditSheet extends StatefulWidget {
   const _PeakEditSheet({
     required this.peak,
+    required this.initialPeak,
     required this.xV,
     required this.yUa,
+    required this.onPreview,
     required this.onApply,
   });
 
   final PeakResult peak;
+  /// Original auto-detected snapshot used by "Reset".
+  final PeakResult initialPeak;
   final List<double> xV;
   final List<double> yUa;
+  /// Pushes a live preview to the chart on every slider change.
+  final void Function(PeakResult) onPreview;
+  /// Commits the edit.
   final void Function(PeakResult) onApply;
 
   @override
@@ -1161,6 +1385,19 @@ class _PeakEditSheetState extends State<_PeakEditSheet> {
       widget.yUa,
     );
     setState(() => _preview = updated);
+    widget.onPreview(updated); // live chart update
+  }
+
+  void _reset() {
+    final initial = widget.initialPeak;
+    setState(() {
+      _apexIdx = initial.apexIndex;
+      _fitLo   = initial.fitLo;
+      _fitHi   = initial.fitHi;
+      _preview = initial;
+    });
+    widget.onPreview(initial); // live chart update
+    widget.onApply(initial);   // commit the restored snapshot
   }
 
   @override
@@ -1215,11 +1452,8 @@ class _PeakEditSheetState extends State<_PeakEditSheet> {
           const SizedBox(height: 20),
           Row(children: [
             OutlinedButton(
-              onPressed: () {
-                widget.onApply(widget.peak.copyWith(isAuto: true));
-                Navigator.pop(context);
-              },
-              child: const Text('Reset Auto'),
+              onPressed: _reset,
+              child: const Text('Reset'),
             ),
             const SizedBox(width: 12),
             Expanded(
