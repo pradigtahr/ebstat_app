@@ -40,6 +40,9 @@ dependencies:
   # Native file picker for CSV import
   file_picker: ^11.0.2
 
+  # Image encoding for annotation export (TIFF/JPG)
+  image: ^4.0.0
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

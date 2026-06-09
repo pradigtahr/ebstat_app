@@ -1,0 +1,1 @@
+enum PeakType { cathodic, anodic }

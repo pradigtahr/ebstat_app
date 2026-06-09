@@ -23,7 +23,9 @@ class MeasurementProvider extends ChangeNotifier {
   String                _nextLabel   = '';
   ProgressUpdate?       _progress;
   String?               _lastBleRow;
-  bool                  _sgEnabled   = true;
+  bool                  _sgEnabled       = true;
+  int                   _sgFilterWindow  = -1; // -1 = None (UI placeholder; TODO: implement SG filtering)
+  int                   _selectedGainCode = 5; // default 35 kΩ (±65 µA)
 
   StreamSubscription<String>?         _dataSub;
   StreamSubscription<ProgressUpdate>? _progressSub;
@@ -40,7 +42,9 @@ class MeasurementProvider extends ChangeNotifier {
   String?                get exportError  => _exportError;
   ProgressUpdate?        get progress     => _progress;
   String?                get lastBleRow   => _lastBleRow;
-  bool                   get sgEnabled    => _sgEnabled;
+  bool                   get sgEnabled        => _sgEnabled;
+  int                    get sgFilterWindow   => _sgFilterWindow;
+  int                    get selectedGainCode => _selectedGainCode;
 
   MeasurementProvider() {
     _loadSgEnabled();
@@ -57,6 +61,17 @@ class MeasurementProvider extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('sg_enabled', value);
+  }
+
+  void setSgFilterWindow(int window) {
+    _sgFilterWindow = window;
+    notifyListeners();
+    // TODO: implement SG filtering using _sgFilterWindow
+  }
+
+  void setSelectedGainCode(int code) {
+    _selectedGainCode = code;
+    notifyListeners();
   }
 
   void selectMode(VoltammetryMode mode) {
@@ -111,7 +126,23 @@ class MeasurementProvider extends ChangeNotifier {
   // ── BLE path ──────────────────────────────────────────────────────────────
 
   Future<void> _startBleMeasurement() async {
-    // Send SG toggle first — info command, resolves after 400 ms quiet period
+    // Send LMP91000 config with selected RTIA (gain code) and locked values.
+    final lmpCmd = EbstatProtocol.buildLmpCmd(
+      gain:     _selectedGainCode,
+      rload:    0, // locked: 10 Ω
+      intz:     1, // locked: 50 %
+      biasSign: 0, // firmware-computed from technique params
+      biasPct:  0, // firmware-computed from technique params
+      refSrc:   0, // firmware-computed from technique params
+    );
+    try {
+      await BleService().sendCommand(lmpCmd);
+    } catch (_) {
+      // Best-effort: proceed even if LMP command fails
+    }
+    if (_state != MeasurementState.running) return;
+
+    // Send SG toggle — info command, resolves after 400 ms quiet period
     final sgCmd = _sgEnabled ? 'SGON' : 'SGOFF';
     try {
       await BleService().sendCommand(sgCmd);

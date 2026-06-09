@@ -1,6 +1,8 @@
 import 'measurement_point.dart';
+import 'peak_result.dart';
+import 'peak_type.dart';
 
-enum PeakType { cathodic, anodic }
+export 'peak_type.dart';
 
 class PeakAnnotation {
   final int measurementIndex;
@@ -19,13 +21,11 @@ class PeakAnnotation {
 class MeasurementSession {
   final String mode;
   final String label;
-  /// Human-readable name for the measurement tree, e.g. "Cyclic Voltammetry 1"
   final String displayName;
   final Map<String, double> parameters;
   final DateTime startedAt;
   final List<MeasurementPoint> points;
-  /// SG Savitzky–Golay smoothed current values, indexed from 0 (null = missing).
-  /// Populated after DONE from firmware SG,<idx>,<current_nA> lines.
+  /// SG smoothed current values indexed from 0 (null = missing).
   final List<double?> sgPoints;
 
   MeasurementSession({
@@ -35,10 +35,9 @@ class MeasurementSession {
     required this.parameters,
     required this.startedAt,
     List<MeasurementPoint>? points,
-  })  : points = points ?? [],
+  })  : points   = points ?? [],
         sgPoints = [];
 
-  /// Distinct cycle numbers in this session (CV only).
   Set<int> get cycles => {
         for (final p in points)
           if (p.cycle != null) p.cycle!,
@@ -46,7 +45,6 @@ class MeasurementSession {
 
   bool get hasSgData => sgPoints.any((v) => v != null);
 
-  /// Remove all points belonging to [cycleNum] (CV only).
   void deleteCycle(int cycleNum) =>
       points.removeWhere((p) => p.cycle == cycleNum);
 
@@ -80,9 +78,13 @@ class ProjectSession {
   final List<MeasurementSession> measurements;
   final List<PeakAnnotation> peaks;
 
+  /// Peaks registered via the tangent-line AnnotationScreen.
+  final List<PeakResult> registeredPeaks;
+
   ProjectSession({required this.modeName})
-      : measurements = [],
-        peaks = [];
+      : measurements    = [],
+        peaks           = [],
+        registeredPeaks = [];
 
   void addMeasurement(MeasurementSession session) => measurements.add(session);
 
@@ -99,20 +101,53 @@ class ProjectSession {
     );
   }
 
+  /// Register (or replace) a peak from the AnnotationScreen.
+  void registerPeak(PeakResult peak) {
+    registeredPeaks.removeWhere(
+      (p) => p.effectivePeakType == peak.effectivePeakType &&
+             p.measurementIdx == peak.measurementIdx,
+    );
+    registeredPeaks.add(peak);
+  }
+
   void deleteMeasurement(int index) {
     if (index < 0 || index >= measurements.length) return;
     measurements.removeAt(index);
     peaks.removeWhere((p) => p.measurementIndex == index);
-    final shifted = peaks
+    registeredPeaks.removeWhere((p) => p.measurementIdx == index);
+    final shiftedPeaks = peaks
         .where((p) => p.measurementIndex > index)
         .map((p) => PeakAnnotation(
               measurementIndex: p.measurementIndex - 1,
-              pointIndex: p.pointIndex,
-              type: p.type,
-              point: p.point,
+              pointIndex:       p.pointIndex,
+              type:             p.type,
+              point:            p.point,
             ))
         .toList();
     peaks.removeWhere((p) => p.measurementIndex > index);
-    peaks.addAll(shifted);
+    peaks.addAll(shiftedPeaks);
+    final shiftedResults = registeredPeaks
+        .where((p) => p.measurementIdx > index)
+        .map((p) => p.copyWith(measurementIdx: p.measurementIdx - 1))
+        .toList();
+    registeredPeaks.removeWhere((p) => p.measurementIdx > index);
+    registeredPeaks.addAll(shiftedResults);
   }
+
+  // ── Experiment summary getters (from registered tangent peaks) ─────────────
+
+  PeakResult? get anodicPeak => registeredPeaks
+      .where((p) => p.effectivePeakType == PeakType.anodic)
+      .firstOrNull;
+
+  PeakResult? get cathodicPeak => registeredPeaks
+      .where((p) => p.effectivePeakType == PeakType.cathodic)
+      .firstOrNull;
+
+  double? get ipa => anodicPeak?.ip;
+  double? get ipc => cathodicPeak?.ip;
+  /// Epa in mV (ep field is in V).
+  double? get epa => anodicPeak != null ? anodicPeak!.ep * 1000 : null;
+  /// Epc in mV (ep field is in V).
+  double? get epc => cathodicPeak != null ? cathodicPeak!.ep * 1000 : null;
 }

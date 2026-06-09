@@ -13,15 +13,12 @@ class LmpConfigScreen extends StatefulWidget {
 }
 
 class _LmpConfigScreenState extends State<LmpConfigScreen> {
-  // Current selections (default to index 0 of each list)
-  int _gain     = 0;
-  int _rload    = 0;
-  int _intz     = 0;
-  int _biasSign = 0; // 0 = negative, 1 = positive
-  int _biasPct  = 0; // index into EbstatProtocol.biasPctValues
-  int _refSrc   = 0; // 0 = internal, 1 = external
+  // Only TIA Gain is user-editable.
+  // Rload=10Ω (code 0), intz=50% (code 1) are locked.
+  // biasSign, biasPct, refSrc are firmware-computed from technique params.
+  int _gain = 0;
 
-  bool _sending = false;
+  bool _sending  = false;
   bool _querying = false;
   String? _statusMsg;
   Map<String, String>? _capsMetadata;
@@ -29,7 +26,6 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
   @override
   Widget build(BuildContext context) {
     final ble = context.watch<BleProvider>();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('LMP91000 Configuration'),
@@ -38,8 +34,7 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
             IconButton(
               icon: _querying
                   ? const SizedBox(
-                      width: 18,
-                      height: 18,
+                      width: 18, height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.memory_outlined),
               tooltip: 'Query capabilities (CAPS)',
@@ -56,7 +51,6 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                // ── Gain ────────────────────────────────────────────────────
                 _ConfigRow(
                   label: 'TIA Gain',
                   subtitle: 'Transimpedance amplifier feedback resistor',
@@ -64,130 +58,45 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
                     value: _gain,
                     items: EbstatProtocol.gainLabels.entries
                         .map((e) => DropdownMenuItem(
-                              value: e.key,
-                              child: Text(e.value),
-                            ))
+                              value: e.key, child: Text(e.value)))
                         .toList(),
                     onChanged: (v) => setState(() => _gain = v!),
                   ),
                 ),
-                const _Divider(),
-
-                // ── RLOAD ───────────────────────────────────────────────────
-                _ConfigRow(
-                  label: 'Rₗ₀ₐ₉ (Load Resistor)',
-                  subtitle: 'Zero-bias load resistor value',
-                  child: _DropdownField<int>(
-                    value: _rload,
-                    items: EbstatProtocol.rloadLabels.entries
-                        .map((e) => DropdownMenuItem(
-                              value: e.key,
-                              child: Text(e.value),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _rload = v!),
+                const SizedBox(height: 12),
+                // Locked-value info card
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.divider),
                   ),
-                ),
-                const _Divider(),
-
-                // ── INTZ ────────────────────────────────────────────────────
-                _ConfigRow(
-                  label: 'Internal Zero',
-                  subtitle: 'Reference voltage percentage of VREF',
-                  child: _DropdownField<int>(
-                    value: _intz,
-                    items: EbstatProtocol.intzLabels.entries
-                        .map((e) => DropdownMenuItem(
-                              value: e.key,
-                              child: Text(e.value),
-                            ))
-                        .toList(),
-                    onChanged: (v) => setState(() => _intz = v!),
-                  ),
-                ),
-                const _Divider(),
-
-                // ── Bias sign + value ────────────────────────────────────────
-                _ConfigRow(
-                  label: 'Bias Voltage',
-                  subtitle: 'Applied bias = sign × percent of VREF',
-                  child: Row(
-                    children: [
-                      // Sign toggle
-                      ToggleButtons(
-                        isSelected: [_biasSign == 0, _biasSign == 1],
-                        onPressed: (i) =>
-                            setState(() => _biasSign = i),
-                        borderRadius: BorderRadius.circular(8),
-                        selectedColor: AppColors.accent1,
-                        fillColor: AppColors.accent1.withOpacity(0.15),
-                        borderColor: AppColors.divider,
-                        selectedBorderColor: AppColors.accent1,
-                        constraints: const BoxConstraints(
-                            minWidth: 44, minHeight: 36),
-                        children: const [
-                          Text('−', style: TextStyle(fontSize: 16)),
-                          Text('+', style: TextStyle(fontSize: 16)),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _DropdownField<int>(
-                          value: _biasPct,
-                          items: List.generate(
-                            EbstatProtocol.biasPctValues.length,
-                            (i) => DropdownMenuItem(
-                              value: i,
-                              child: Text(
-                                  '${EbstatProtocol.biasPctValues[i]} %'),
-                            ),
-                          ),
-                          onChanged: (v) =>
-                              setState(() => _biasPct = v!),
-                        ),
-                      ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: const [
+                      Text('LOCKED SETTINGS',
+                          style: TextStyle(
+                              color: AppColors.textSecondary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1)),
+                      SizedBox(height: 8),
+                      _LockedRow(label: 'Rload', value: '10 Ω'),
+                      _LockedRow(label: 'Internal Zero', value: '50 %'),
+                      _LockedRow(label: 'Bias / Vref source', value: 'Firmware-computed'),
                     ],
                   ),
                 ),
-                const _Divider(),
-
-                // ── Reference source ─────────────────────────────────────────
-                _ConfigRow(
-                  label: 'Reference Source',
-                  subtitle: 'VREF source for the internal zero circuit',
-                  child: _DropdownField<int>(
-                    value: _refSrc,
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('Internal (50 %)')),
-                      DropdownMenuItem(value: 1, child: Text('External')),
-                    ],
-                    onChanged: (v) => setState(() => _refSrc = v!),
-                  ),
-                ),
-
                 const SizedBox(height: 24),
-
-                // ── Preview ───────────────────────────────────────────────────
-                _PreviewCard(
-                  gain:     _gain,
-                  rload:    _rload,
-                  intz:     _intz,
-                  biasSign: _biasSign,
-                  biasPct:  _biasPct,
-                  refSrc:   _refSrc,
-                ),
+                _PreviewCard(gain: _gain),
               ],
             ),
           ),
-
-          // ── Bottom action bar ─────────────────────────────────────────────
           _ActionBar(
             enabled: ble.isConnected && !_sending,
             sending: _sending,
-            onReset: () => setState(() {
-              _gain = 0; _rload = 0; _intz = 0;
-              _biasSign = 0; _biasPct = 0; _refSrc = 0;
-            }),
+            onReset: () => setState(() => _gain = 0),
             onApply: () => _applyConfig(ble),
           ),
         ],
@@ -196,11 +105,7 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
   }
 
   Future<void> _queryCaps(BleProvider ble) async {
-    setState(() {
-      _querying    = true;
-      _statusMsg   = null;
-      _capsMetadata = null;
-    });
+    setState(() { _querying = true; _statusMsg = null; _capsMetadata = null; });
     try {
       final result = await ble.sendCommand(FwCmd.caps);
       setState(() {
@@ -217,23 +122,18 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
   }
 
   Future<void> _applyConfig(BleProvider ble) async {
-    setState(() {
-      _sending   = true;
-      _statusMsg = null;
-    });
+    setState(() { _sending = true; _statusMsg = null; });
     final cmd = EbstatProtocol.buildLmpCmd(
       gain:     _gain,
-      rload:    _rload,
-      intz:     _intz,
-      biasSign: _biasSign,
-      biasPct:  _biasPct,
-      refSrc:   _refSrc,
+      rload:    0, // locked: 10 Ω
+      intz:     1, // locked: 50 %
+      biasSign: 0, // firmware-computed
+      biasPct:  0, // firmware-computed
+      refSrc:   0, // firmware-computed
     );
     try {
       final result = await ble.sendCommand(cmd);
-      final hasError = result.comments.any(
-        (c) => c.toLowerCase().contains('err'),
-      );
+      final hasError = result.comments.any((c) => c.toLowerCase().contains('err'));
       setState(() {
         _statusMsg = hasError
             ? 'Device reported an error applying configuration.'
@@ -253,39 +153,34 @@ class _NotConnectedBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         color: Colors.redAccent.withOpacity(0.1),
-        child: const Row(
-          children: [
-            Icon(Icons.warning_amber, color: Colors.redAccent, size: 14),
-            SizedBox(width: 8),
-            Text('Not connected — connect a device to apply settings.',
+        child: const Row(children: [
+          Icon(Icons.warning_amber, color: Colors.redAccent, size: 14),
+          SizedBox(width: 8),
+          Flexible(
+            child: Text('Not connected — connect a device to apply settings.',
                 style: TextStyle(color: Colors.redAccent, fontSize: 12)),
-          ],
-        ),
+          ),
+        ]),
       );
 }
 
 class _StatusBanner extends StatelessWidget {
   const _StatusBanner({required this.message});
   final String message;
-
   @override
   Widget build(BuildContext context) => Container(
         width: double.infinity,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         color: AppColors.accent1.withOpacity(0.12),
-        child: Text(message,
-            style: const TextStyle(color: AppColors.accent1, fontSize: 12)),
+        child: Text(message, style: const TextStyle(color: AppColors.accent1, fontSize: 12)),
       );
 }
 
 class _CapsCard extends StatelessWidget {
   const _CapsCard({required this.metadata});
   final Map<String, String> metadata;
-
   @override
   Widget build(BuildContext context) => Container(
         margin: const EdgeInsets.all(16),
@@ -300,32 +195,24 @@ class _CapsCard extends StatelessWidget {
           children: [
             const Text('DEVICE CAPABILITIES',
                 style: TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1)),
+                    color: AppColors.textSecondary, fontSize: 10,
+                    fontWeight: FontWeight.w700, letterSpacing: 1)),
             const SizedBox(height: 8),
             ...metadata.entries.map(
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(
-                  children: [
-                    Expanded(
-                        flex: 2,
-                        child: Text(e.key,
-                            style: const TextStyle(
-                                color: AppColors.accent2,
-                                fontSize: 12,
-                                fontFamily: 'monospace'))),
-                    Expanded(
-                        flex: 3,
-                        child: Text(e.value,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 12,
-                                fontFamily: 'monospace'))),
-                  ],
-                ),
+                child: Row(children: [
+                  Expanded(
+                      flex: 2,
+                      child: Text(e.key,
+                          style: const TextStyle(
+                              color: AppColors.accent2, fontSize: 12, fontFamily: 'monospace'))),
+                  Expanded(
+                      flex: 3,
+                      child: Text(e.value,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 12, fontFamily: 'monospace'))),
+                ]),
               ),
             ),
           ],
@@ -333,13 +220,31 @@ class _CapsCard extends StatelessWidget {
       );
 }
 
+class _LockedRow extends StatelessWidget {
+  const _LockedRow({required this.label, required this.value});
+  final String label;
+  final String value;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(children: [
+          Expanded(
+              child: Text(label,
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 13))),
+          Text(value,
+              style: const TextStyle(
+                  color: Colors.white70, fontSize: 13, fontFamily: 'monospace')),
+          const SizedBox(width: 4),
+          const Icon(Icons.lock_outline, size: 13, color: AppColors.textSecondary),
+        ]),
+      );
+}
+
 class _ConfigRow extends StatelessWidget {
-  const _ConfigRow(
-      {required this.label, required this.subtitle, required this.child});
+  const _ConfigRow({required this.label, required this.subtitle, required this.child});
   final String label;
   final String subtitle;
   final Widget child;
-
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -348,13 +253,10 @@ class _ConfigRow extends StatelessWidget {
           children: [
             Text(label,
                 style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600)),
+                    color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 2),
             Text(subtitle,
-                style: const TextStyle(
-                    color: AppColors.textSecondary, fontSize: 12)),
+                style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
             const SizedBox(height: 10),
             child,
           ],
@@ -362,23 +264,11 @@ class _ConfigRow extends StatelessWidget {
       );
 }
 
-class _Divider extends StatelessWidget {
-  const _Divider();
-
-  @override
-  Widget build(BuildContext context) =>
-      const Divider(color: AppColors.divider, height: 1);
-}
-
 class _DropdownField<T> extends StatelessWidget {
-  const _DropdownField(
-      {required this.value,
-      required this.items,
-      required this.onChanged});
+  const _DropdownField({required this.value, required this.items, required this.onChanged});
   final T value;
   final List<DropdownMenuItem<T>> items;
   final ValueChanged<T?> onChanged;
-
   @override
   Widget build(BuildContext context) => DropdownButtonFormField<T>(
         value: value,
@@ -389,8 +279,7 @@ class _DropdownField<T> extends StatelessWidget {
         decoration: InputDecoration(
           filled: true,
           fillColor: AppColors.surface,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
             borderSide: const BorderSide(color: AppColors.divider),
@@ -404,25 +293,12 @@ class _DropdownField<T> extends StatelessWidget {
 }
 
 class _PreviewCard extends StatelessWidget {
-  const _PreviewCard({
-    required this.gain,
-    required this.rload,
-    required this.intz,
-    required this.biasSign,
-    required this.biasPct,
-    required this.refSrc,
-  });
-  final int gain, rload, intz, biasSign, biasPct, refSrc;
-
+  const _PreviewCard({required this.gain});
+  final int gain;
   @override
   Widget build(BuildContext context) {
     final cmd = EbstatProtocol.buildLmpCmd(
-      gain:     gain,
-      rload:    rload,
-      intz:     intz,
-      biasSign: biasSign,
-      biasPct:  biasPct,
-      refSrc:   refSrc,
+      gain: gain, rload: 0, intz: 1, biasSign: 0, biasPct: 0, refSrc: 0,
     );
     return Container(
       padding: const EdgeInsets.all(12),
@@ -436,16 +312,12 @@ class _PreviewCard extends StatelessWidget {
         children: [
           const Text('COMMAND PREVIEW',
               style: TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1)),
+                  color: AppColors.textSecondary, fontSize: 10,
+                  fontWeight: FontWeight.w700, letterSpacing: 1)),
           const SizedBox(height: 6),
           Text(cmd,
               style: const TextStyle(
-                  color: AppColors.accent1,
-                  fontFamily: 'monospace',
-                  fontSize: 13)),
+                  color: AppColors.accent1, fontFamily: 'monospace', fontSize: 13)),
         ],
       ),
     );
@@ -454,16 +326,13 @@ class _PreviewCard extends StatelessWidget {
 
 class _ActionBar extends StatelessWidget {
   const _ActionBar({
-    required this.enabled,
-    required this.sending,
-    required this.onReset,
-    required this.onApply,
+    required this.enabled, required this.sending,
+    required this.onReset, required this.onApply,
   });
   final bool enabled;
   final bool sending;
   final VoidCallback onReset;
   final VoidCallback onApply;
-
   @override
   Widget build(BuildContext context) => Container(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
@@ -471,28 +340,24 @@ class _ActionBar extends StatelessWidget {
           color: AppColors.primary,
           border: Border(top: BorderSide(color: AppColors.divider)),
         ),
-        child: Row(
-          children: [
-            OutlinedButton.icon(
-              onPressed: onReset,
-              icon: const Icon(Icons.restart_alt),
-              label: const Text('Reset'),
+        child: Row(children: [
+          OutlinedButton.icon(
+            onPressed: onReset,
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Reset'),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: enabled ? onApply : null,
+              icon: sending
+                  ? const SizedBox(
+                      width: 16, height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.send),
+              label: Text(sending ? 'Sending…' : 'Apply Configuration'),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: enabled ? onApply : null,
-                icon: sending
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.send),
-                label: Text(sending ? 'Sending…' : 'Apply Configuration'),
-              ),
-            ),
-          ],
-        ),
+          ),
+        ]),
       );
 }

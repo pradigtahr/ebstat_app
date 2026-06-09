@@ -9,12 +9,17 @@ import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/project_session.dart';
+import '../models/peak_result.dart';
 import '../services/peak_finder.dart';
+import '../services/csv_export_service.dart';
+import '../services/xlsx_export_service.dart';
+import '../services/txt_export_service.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
 import '../services/palmsens_csv_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/cv_chart.dart';
+import 'annotation_screen.dart';
 import 'parameters_screen.dart';
 
 // ── Bar metadata for touch callback ──────────────────────────────────────────
@@ -254,12 +259,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                 ),
               ],
             ),
-          if (project != null && project.measurements.isNotEmpty)
+          if (project != null && project.measurements.isNotEmpty) ...[
+            IconButton(
+              icon: const Icon(Icons.auto_graph),
+              tooltip: 'Find Peaks',
+              onPressed: () => _showFindPeaksFlow(context, project),
+            ),
             IconButton(
               icon: const Icon(Icons.save_alt),
               tooltip: 'Save chart image',
               onPressed: _saveChartImage,
             ),
+          ],
         ],
       ),
       body: project == null || project.measurements.isEmpty
@@ -322,6 +333,87 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
         child: Text('No measurements in this project.',
             style: TextStyle(color: AppColors.textSecondary)),
       );
+
+  // ── Find Peaks flow ────────────────────────────────────────────────────────
+
+  Future<void> _showFindPeaksFlow(
+      BuildContext context, ProjectSession project) async {
+    final widthCtrl  = TextEditingController(text: '10.0');
+    final heightCtrl = TextEditingController(text: '1.0');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Peak Detection Thresholds',
+            style: TextStyle(color: Colors.white, fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: widthCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Min peak width (mV)',
+                suffixText: 'mV',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: heightCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              style: const TextStyle(color: Colors.white),
+              decoration: const InputDecoration(
+                labelText: 'Min peak height (µA)',
+                suffixText: 'µA',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Find Peaks')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final minW = double.tryParse(widthCtrl.text)  ?? 10.0;
+    final minH = double.tryParse(heightCtrl.text) ?? 1.0;
+
+    // Re-run auto-detection with new thresholds and update detected peaks.
+    final tech = context.read<MeasurementProvider>().selectedMode?.abbreviation ?? '';
+    final fresh = <PeakResult>[];
+    for (int i = 0; i < project.measurements.length; i++) {
+      fresh.addAll(PeakFinder.analyze(
+        project.measurements[i], i, tech,
+        minWidthMv: minW, minHeightUa: minH,
+      ));
+    }
+    setState(() {
+      _detectedPeaks = fresh;
+      _initialPeaks  = List<PeakResult>.from(fresh);
+    });
+
+    // Navigate to AnnotationScreen for manual tangent work.
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AnnotationScreen(
+          session: project,
+          measurementIdx: 0,
+        ),
+      ),
+    );
+  }
 
   // ── Manual annotation sheet ────────────────────────────────────────────────
 
@@ -1256,7 +1348,7 @@ class _BottomBar extends StatelessWidget {
           child: OutlinedButton.icon(
             onPressed: () => _showExportSheet(context),
             icon: const Icon(Icons.save_alt, size: 18),
-            label: const Text('Export CSV'),
+            label: const Text('Export File'),
           ),
         ),
         const SizedBox(width: 12),
@@ -1278,11 +1370,11 @@ class _BottomBar extends StatelessWidget {
 
   void _showExportSheet(BuildContext context) {
     showModalBottomSheet(
-      context: context, isScrollControlled: true,
+      context: context,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (ctx) => _ExportSheet(project: project, mode: mode),
+      builder: (ctx) => _ExportFormatSheet(project: project),
     );
   }
 }
@@ -1514,7 +1606,88 @@ class _NudgeSliderRow extends StatelessWidget {
   }
 }
 
-// ── Export CSV sheet ──────────────────────────────────────────────────────────
+// ── Export format picker sheet ────────────────────────────────────────────────
+class _ExportFormatSheet extends StatefulWidget {
+  const _ExportFormatSheet({required this.project});
+  final ProjectSession project;
+  @override
+  State<_ExportFormatSheet> createState() => _ExportFormatSheetState();
+}
+
+class _ExportFormatSheetState extends State<_ExportFormatSheet> {
+  bool _exporting = false;
+  String? _error;
+
+  Future<void> _run(Future<void> Function() fn) async {
+    setState(() { _exporting = true; _error = null; });
+    try {
+      await fn();
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) setState(() => _error = 'Export failed: $e');
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(0, 12, 0, 24),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            width: 36, height: 4,
+            decoration: BoxDecoration(
+                color: AppColors.divider, borderRadius: BorderRadius.circular(2)),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Export File',
+                  style: TextStyle(
+                      color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              child: Text(_error!,
+                  style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            ),
+          if (_exporting)
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: CircularProgressIndicator(),
+            )
+          else ...[
+            ListTile(
+              leading: const Icon(Icons.table_chart, color: AppColors.accent2),
+              title: const Text('CSV', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Comma-separated values',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              onTap: () => _run(() => CsvExportService.export(widget.project)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.grid_on, color: AppColors.accent2),
+              title: const Text('XLSX', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Excel workbook (multi-sheet)',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              onTap: () => _run(() => XlsxExportService.export(widget.project)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.text_snippet, color: AppColors.accent2),
+              title: const Text('TXT', style: TextStyle(color: Colors.white)),
+              subtitle: const Text('Plain text (PalmSens-compatible)',
+                  style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+              onTap: () => _run(() => TxtExportService.export(widget.project)),
+            ),
+          ],
+        ]),
+      );
+}
+
+// ── (Legacy export sheet kept for reference — no longer used) ─────────────────
 class _ExportSheet extends StatefulWidget {
   const _ExportSheet({required this.project, required this.mode});
   final ProjectSession project;
