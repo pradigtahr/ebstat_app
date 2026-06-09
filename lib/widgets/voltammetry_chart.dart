@@ -4,6 +4,12 @@ import 'package:flutter/material.dart';
 import '../models/measurement_point.dart';
 import '../theme/app_theme.dart';
 
+/// Extracts the unit string from a label like "Potential (mV)" → "mV".
+String _unitOf(String label) {
+  final m = RegExp(r'\(([^)]+)\)').firstMatch(label);
+  return m?.group(1) ?? '';
+}
+
 class VoltammetryChart extends StatelessWidget {
   const VoltammetryChart({
     super.key,
@@ -112,7 +118,8 @@ class VoltammetryChart extends StatelessWidget {
             getTooltipColor: (_) => AppColors.surface,
             getTooltipItems: (spots) => spots
                 .map((s) => LineTooltipItem(
-                      'x: ${s.x.toStringAsFixed(2)}\ny: ${s.y.toStringAsFixed(4)} nA',
+                      '${s.x.toStringAsFixed(2)} ${_unitOf(xLabel)}\n'
+                      '${s.y.toStringAsFixed(4)} ${_unitOf(yLabel)}',
                       const TextStyle(
                           color: Colors.white, fontSize: 11),
                     ))

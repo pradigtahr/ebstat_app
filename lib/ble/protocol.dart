@@ -145,35 +145,39 @@ class EbstatProtocol {
 
   /// [xColIndex, yColIndex] into the firmware's raw CSV row per technique.
   ///
-  /// CV  (9 cols): time_ms(0) cycle(1) direction(2) e_target_mV(3)
-  ///               e_actual_mV(4) vref_mV(5) vout_mV(6) vintz_mV(7) current_nA(8)
-  ///               → x = e_actual_mV[4],  y = current_nA[8]
+  /// CV  (10 cols): time_ms(0) cycle(1) direction(2) e_target_mV(3)
+  ///                e_actual_mV(4) vref_mV(5) vout_mV(6) vintz_mV(7)
+  ///                current_nA(8) gain_ohms(9)
+  ///                → x = e_actual_mV[4],  y = current_nA[8]
   ///
-  /// CA  (7 cols): time_ms(0) stage(1) e_bias_mV(2) vref_mV(3)
-  ///               vout_mV(4) vintz_mV(5) current_nA(6)
-  ///               → x = time_ms[0],      y = current_nA[6]
+  /// CA  (7 cols):  time_ms(0) stage(1) e_bias_mV(2) vref_mV(3)
+  ///                vout_mV(4) vintz_mV(5) current_nA(6)
+  ///                → x = time_ms[0],      y = current_nA[6]
   ///
   /// DPV (13 cols): step(0) t_pulse_ms(1) t_pre_ms(2) e_step_mV(3)
   ///                e_pulse_mV(4) e_pre_mV(5) vref_pulse_mV(6) vref_pre_mV(7)
   ///                vout_pulse_mV(8) vout_pre_mV(9) I_pulse_nA(10)
   ///                I_pre_nA(11) delta_I_nA(12)
-  ///                → x = e_step_mV[3],   y = delta_I_nA[12]
+  ///                → x = e_pulse_mV[4],   y = delta_I_nA[12]
+  ///                  (DAC is at e_pulse = e_step + dE_pulse during I_pulse sampling)
   ///
   /// SWV (13 cols): step(0) t_fwd_ms(1) t_rev_ms(2) e_step_mV(3)
   ///                e_fwd_mV(4) e_rev_mV(5) vref_fwd_mV(6) vref_rev_mV(7)
   ///                vout_fwd_mV(8) vout_rev_mV(9) I_fwd_nA(10)
   ///                I_rev_nA(11) delta_I_nA(12)
-  ///                → x = e_step_mV[3],   y = delta_I_nA[12]
+  ///                → x = e_fwd_mV[4],    y = delta_I_nA[12]
+  ///                  (DAC is at e_fwd = e_step + dE_pulse/2 during I_fwd sampling)
   ///
   /// NPV (7 cols):  pulse(0) t_ms(1) vref_mV(2) e_bias_mV(3)
   ///                vout_mV(4) vintz_mV(5) current_nA(6)
   ///                → x = e_bias_mV[3],   y = current_nA[6]
+  ///                  (e_bias_mV = e_top = e_pulse + dE_pulse, actual applied potential)
   static List<int> xyColumns(String technique) =>
       switch (technique.toUpperCase()) {
         'CV'  => [4, 8],
         'CA'  => [0, 6],
-        'DPV' => [3, 12],
-        'SWV' => [3, 12],
+        'DPV' => [4, 12],
+        'SWV' => [4, 12],
         'NPV' => [3, 6],
         _     => [0, 1],
       };
