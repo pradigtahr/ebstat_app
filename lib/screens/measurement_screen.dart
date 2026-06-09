@@ -23,8 +23,44 @@ class _MeasurementScreenState extends State<MeasurementScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<MeasurementProvider>().startMeasurement();
+      final mp = context.read<MeasurementProvider>();
+      mp.registerMeasurementCallbacks(
+        onNavigateToAnalysis: _goToAnalysis,
+        onPopToParameters: _popToParams,
+        onWarning: _showWarning,
+      );
+      mp.startMeasurement();
     });
+  }
+
+  @override
+  void dispose() {
+    context.read<MeasurementProvider>().unregisterMeasurementCallbacks();
+    super.dispose();
+  }
+
+  void _goToAnalysis() {
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const AnalysisScreen()),
+    );
+  }
+
+  void _popToParams() {
+    if (!mounted) return;
+    Navigator.pop(context);
+  }
+
+  void _showWarning(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.orange,
+        duration: const Duration(seconds: 5),
+      ),
+    );
   }
 
   @override

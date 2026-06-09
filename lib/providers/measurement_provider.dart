@@ -41,6 +41,12 @@ class MeasurementProvider extends ChangeNotifier {
   StreamSubscription<ProgressUpdate>? _progressSub;
   Timer?                              _demoTimer;
   Timer?                              _sgTimer;
+  Timer?                              _silenceTimer;
+  bool                                _progressReceived = false;
+  bool                                _runCompleted     = false;
+  VoidCallback?                       _navigateToAnalysis;
+  VoidCallback?                       _popToParameters;
+  void Function(String)?              _onWarning;
 
   // ── Getters ───────────────────────────────────────────────────────────────
   VoltammetryMode?       get selectedMode => _selectedMode;
@@ -119,11 +125,13 @@ class MeasurementProvider extends ChangeNotifier {
       parameters:  Map.from(_parameters),
       startedAt:   DateTime.now(),
     );
-    _nextLabel   = '';
-    _state       = MeasurementState.running;
-    _exportError = null;
-    _progress    = null;
-    _lastBleRow  = null;
+    _nextLabel        = '';
+    _state            = MeasurementState.running;
+    _exportError      = null;
+    _progress         = null;
+    _lastBleRow       = null;
+    _progressReceived = false;
+    _runCompleted     = false;
     notifyListeners();
 
     if (BleService().isConnected) {
@@ -193,8 +201,40 @@ class MeasurementProvider extends ChangeNotifier {
     final isCv = mode == 'CV';
 
     _dataSub = BleService().rawLines.listen((line) {
+      // Reset silence timer on every incoming line once progress has started
+      if (_progressReceived) _resetSilenceTimer();
+
       if (_state == MeasurementState.running) {
-        if (FwTerminator.is_(line) || EbstatProtocol.isMetadata(line)) return;
+        final trimmed = line.trim();
+
+        // Intercept special # lines before the generic isMetadata early-return
+        if (trimmed == '# DONE') {
+          _triggerRunComplete();
+          return;
+        }
+        if (trimmed == '# ABORT') {
+          _triggerRunAbort();
+          return;
+        }
+        if (trimmed.startsWith('# ERR') || trimmed.startsWith('# WARN')) {
+          debugPrint('[BLE] $trimmed');
+          _onWarning?.call(trimmed.replaceFirst(RegExp(r'^#\s*'), ''));
+          return;
+        }
+
+        // Detect first # progress= line → start silence timer
+        if (EbstatProtocol.isMetadata(line)) {
+          if (!_progressReceived) {
+            final meta = EbstatProtocol.parseMetadata(line);
+            if (meta.containsKey('progress')) {
+              _progressReceived = true;
+              _startSilenceTimer();
+            }
+          }
+          return;
+        }
+
+        if (FwTerminator.is_(line)) return;
         if (!headerSeen) { headerSeen = true; return; }
         _lastBleRow = line;
         final cols = line.split(',');
@@ -231,7 +271,10 @@ class MeasurementProvider extends ChangeNotifier {
 
     BleService()
         .sendCommand(cmd)
-        .then(_onBleRunComplete)
+        .then((result) async {
+          await _onBleRunComplete(result);
+          _navigateToAnalysis?.call();
+        })
         .catchError(_onBleRunError);
   }
 
@@ -251,6 +294,9 @@ class MeasurementProvider extends ChangeNotifier {
   }
 
   Future<void> _onBleRunComplete(RunResult result) async {
+    if (_runCompleted) return; // already handled (e.g. via # DONE line)
+    _runCompleted = true;
+    _cancelSilenceTimer();
     _progressSub?.cancel();
     _progressSub = null;
     _progress    = null;
@@ -281,6 +327,7 @@ class MeasurementProvider extends ChangeNotifier {
   }
 
   void _onBleRunError(Object error) {
+    _cancelSilenceTimer();
     _dataSub?.cancel();
     _dataSub = null;
     _progressSub?.cancel();
@@ -296,6 +343,71 @@ class MeasurementProvider extends ChangeNotifier {
         ? 'Device disconnected mid-run'
         : 'BLE error: $error';
     notifyListeners();
+  }
+
+  // ── Silence timer ─────────────────────────────────────────────────────────
+
+  void _startSilenceTimer() {
+    _silenceTimer?.cancel();
+    _silenceTimer = Timer(const Duration(milliseconds: 3000), () {
+      debugPrint('[BLE] ⚠ 3 s silence after progress — treating as implicit DONE');
+      _triggerRunComplete();
+    });
+  }
+
+  void _resetSilenceTimer() {
+    if (_silenceTimer == null) return;
+    _silenceTimer!.cancel();
+    _silenceTimer = Timer(const Duration(milliseconds: 3000), () {
+      debugPrint('[BLE] ⚠ 3 s silence after progress — treating as implicit DONE');
+      _triggerRunComplete();
+    });
+  }
+
+  void _cancelSilenceTimer() {
+    _silenceTimer?.cancel();
+    _silenceTimer = null;
+  }
+
+  // ── Completion triggers ───────────────────────────────────────────────────
+
+  Future<void> _triggerRunComplete() async {
+    await _onBleRunComplete(const RunResult(aborted: false));
+    _navigateToAnalysis?.call();
+  }
+
+  Future<void> _triggerRunAbort() async {
+    _cancelSilenceTimer();
+    if (_session != null && _session!.points.isNotEmpty) {
+      await _onBleRunComplete(const RunResult(aborted: true));
+      _navigateToAnalysis?.call();
+    } else {
+      _dataSub?.cancel();      _dataSub      = null;
+      _progressSub?.cancel();  _progressSub  = null;
+      _progress     = null;
+      _runCompleted = true;
+      _state        = MeasurementState.idle;
+      notifyListeners();
+      _popToParameters?.call();
+    }
+  }
+
+  // ── Navigation / warning callbacks ────────────────────────────────────────
+
+  void registerMeasurementCallbacks({
+    required VoidCallback onNavigateToAnalysis,
+    required VoidCallback onPopToParameters,
+    required void Function(String) onWarning,
+  }) {
+    _navigateToAnalysis = onNavigateToAnalysis;
+    _popToParameters    = onPopToParameters;
+    _onWarning          = onWarning;
+  }
+
+  void unregisterMeasurementCallbacks() {
+    _navigateToAnalysis = null;
+    _popToParameters    = null;
+    _onWarning          = null;
   }
 
   // ── Demo simulation ───────────────────────────────────────────────────────
@@ -402,6 +514,7 @@ class MeasurementProvider extends ChangeNotifier {
 
   void stopMeasurement() {
     if (BleService().isConnected && _state == MeasurementState.running) {
+      _cancelSilenceTimer();
       BleService().sendStop();
       // State transitions in _onBleRunComplete when ABORTED arrives
       return;
@@ -414,6 +527,7 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _cancelSilenceTimer();
     if (_session != null && _session!.points.isNotEmpty) {
       _project?.addMeasurement(_session!);
     }
@@ -432,6 +546,7 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _cancelSilenceTimer();
     _project      = project;
     _selectedMode = mode;
     _session      = null;
@@ -450,6 +565,7 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _cancelSilenceTimer();
     _session     = null;
     _state       = MeasurementState.idle;
     _exportError = null;
@@ -522,6 +638,7 @@ class MeasurementProvider extends ChangeNotifier {
     _dataSub?.cancel();
     _progressSub?.cancel();
     _sgTimer?.cancel();
+    _silenceTimer?.cancel();
     super.dispose();
   }
 }
