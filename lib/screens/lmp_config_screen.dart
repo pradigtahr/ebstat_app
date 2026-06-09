@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../ble/protocol.dart';
 import '../providers/ble_provider.dart';
+import '../providers/measurement_provider.dart' show MeasurementProvider;
 import '../theme/app_theme.dart';
 
 class LmpConfigScreen extends StatefulWidget {
@@ -82,9 +83,10 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
                               fontWeight: FontWeight.w700,
                               letterSpacing: 1)),
                       SizedBox(height: 8),
-                      _LockedRow(label: 'Rload', value: '10 Ω'),
+                      _LockedRow(label: 'Rload',       value: '10 Ω'),
                       _LockedRow(label: 'Internal Zero', value: '50 %'),
-                      _LockedRow(label: 'Bias / Vref source', value: 'Firmware-computed'),
+                      _LockedRow(label: 'Bias sign',   value: 'Positive (POS)'),
+                      _LockedRow(label: 'Vref source', value: 'External (DAC-controlled)'),
                     ],
                   ),
                 ),
@@ -125,11 +127,11 @@ class _LmpConfigScreenState extends State<LmpConfigScreen> {
     setState(() { _sending = true; _statusMsg = null; });
     final cmd = EbstatProtocol.buildLmpCmd(
       gain:     _gain,
-      rload:    0, // locked: 10 Ω
-      intz:     1, // locked: 50 %
-      biasSign: 0, // firmware-computed
-      biasPct:  0, // firmware-computed
-      refSrc:   0, // firmware-computed
+      rload:    MeasurementProvider.kLmpRload,
+      intz:     MeasurementProvider.kLmpIntz,
+      biasSign: MeasurementProvider.kLmpBiasSign,
+      biasPct:  MeasurementProvider.kLmpBiasPct,
+      refSrc:   MeasurementProvider.kLmpRefSrc,
     );
     try {
       final result = await ble.sendCommand(cmd);
@@ -298,7 +300,12 @@ class _PreviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cmd = EbstatProtocol.buildLmpCmd(
-      gain: gain, rload: 0, intz: 1, biasSign: 0, biasPct: 0, refSrc: 0,
+      gain:     gain,
+      rload:    MeasurementProvider.kLmpRload,
+      intz:     MeasurementProvider.kLmpIntz,
+      biasSign: MeasurementProvider.kLmpBiasSign,
+      biasPct:  MeasurementProvider.kLmpBiasPct,
+      refSrc:   MeasurementProvider.kLmpRefSrc,
     );
     return Container(
       padding: const EdgeInsets.all(12),

@@ -14,6 +14,16 @@ import '../services/xlsx_export_service.dart';
 enum MeasurementState { idle, running, done }
 
 class MeasurementProvider extends ChangeNotifier {
+  // ── Locked LMP91000 constants ─────────────────────────────────────────────
+  // biasSign MUST be 1 (POS): the firmware bias resolver assumes positive sign.
+  // refSrc   MUST be 1 (EXT): firmware drives VREF from the MCP4725 DAC; with
+  //   INT the chip ignores the DAC and uses its internal divider, producing
+  //   sawtooth artifacts on every VREF switch.
+  static const int kLmpRload    = 0; // 10 Ω
+  static const int kLmpIntz     = 1; // 50 %
+  static const int kLmpBiasSign = 1; // POS — required by firmware
+  static const int kLmpBiasPct  = 0; // per-step override by firmware
+  static const int kLmpRefSrc   = 1; // EXT — required for DAC VREF
   VoltammetryMode?      _selectedMode;
   Map<String, double>   _parameters  = {};
   MeasurementState      _state       = MeasurementState.idle;
@@ -129,16 +139,24 @@ class MeasurementProvider extends ChangeNotifier {
     // Send LMP91000 config with selected RTIA (gain code) and locked values.
     final lmpCmd = EbstatProtocol.buildLmpCmd(
       gain:     _selectedGainCode,
-      rload:    0, // locked: 10 Ω
-      intz:     1, // locked: 50 %
-      biasSign: 0, // firmware-computed from technique params
-      biasPct:  0, // firmware-computed from technique params
-      refSrc:   0, // firmware-computed from technique params
+      rload:    kLmpRload,
+      intz:     kLmpIntz,
+      biasSign: kLmpBiasSign,
+      biasPct:  kLmpBiasPct,
+      refSrc:   kLmpRefSrc,
     );
-    try {
-      await BleService().sendCommand(lmpCmd);
-    } catch (_) {
-      // Best-effort: proceed even if LMP command fails
+    // Safety guard: refuse to send if the command would enable the wrong
+    // reference source or bias polarity — both cause data corruption.
+    if (kLmpBiasSign != 1 || kLmpRefSrc != 1) {
+      debugPrint('⚠ LMP pre-command blocked: biasSign=$kLmpBiasSign '
+          'refSrc=$kLmpRefSrc — must be biasSign=1 (POS) and refSrc=1 (EXT)');
+      // Do not send; fall through to measurement command without LMP setup.
+    } else {
+      try {
+        await BleService().sendCommand(lmpCmd);
+      } catch (_) {
+        // Best-effort: proceed even if LMP command fails
+      }
     }
     if (_state != MeasurementState.running) return;
 
