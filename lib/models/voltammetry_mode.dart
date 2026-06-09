@@ -79,7 +79,7 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
       hint: '5000', defaultValue: 100, min: 5000,
     ),
     const VoltammetryParameter(
-      key: 'samples', label: 'Samples', unit: '#',
+      key: 'samples_per_stage', label: 'Samples', unit: '#',
       hint: '50', defaultValue: 50, min: 1, max: 500,
     ),
   ],

@@ -142,8 +142,19 @@ class MeasurementProvider extends ChangeNotifier {
     }
     if (_state != MeasurementState.running) return;
 
+    // Configure SG filter window if SG is enabled and a specific window is set.
+    // _sgFilterWindow: -1 = None (no SGSET), 0 = default, >0 = half_window size.
+    if (_sgEnabled && _sgFilterWindow > 0) {
+      try {
+        await BleService().sendCommand('${FwCmd.sgset},$_sgFilterWindow,2');
+      } catch (_) {
+        // Best-effort
+      }
+      if (_state != MeasurementState.running) return;
+    }
+
     // Send SG toggle — info command, resolves after 400 ms quiet period
-    final sgCmd = _sgEnabled ? 'SGON' : 'SGOFF';
+    final sgCmd = _sgEnabled ? FwCmd.sgon : FwCmd.sgoff;
     try {
       await BleService().sendCommand(sgCmd);
     } catch (_) {
