@@ -64,7 +64,7 @@ class BleService {
   // ── Connection state ──────────────────────────────────────────────────────
   bool             get isConnected     => _device != null;
   BluetoothDevice? get connectedDevice => _device;
-  int _mtu = 23; // updated after MTU negotiation
+  int _mtu = 23; // default ATT MTU; not negotiated (requestMtu unreliable on some Android)
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Scan
@@ -105,13 +105,6 @@ class BleService {
         _onUnexpectedDisconnect();
       }
     });
-
-    // Request MTU=247 — nRF52840 supports up to 247.
-    try {
-      _mtu = await device.requestMtu(247);
-    } catch (_) {
-      _mtu = 23;
-    }
 
     await _discoverNus(device);
     _connStateSC.add(true);
