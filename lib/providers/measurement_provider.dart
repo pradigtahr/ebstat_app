@@ -33,7 +33,7 @@ class MeasurementProvider extends ChangeNotifier {
   String                _nextLabel   = '';
   ProgressUpdate?       _progress;
   String?               _lastBleRow;
-  bool                  _sgEnabled       = true;
+  bool                  _sgEnabled       = false;
   int                   _sgFilterWindow  = -1; // -1 = None (UI placeholder; TODO: implement SG filtering)
   int                   _selectedGainCode = 5; // default 35 kΩ (±65 µA)
 
@@ -68,7 +68,7 @@ class MeasurementProvider extends ChangeNotifier {
 
   Future<void> _loadSgEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    _sgEnabled = prefs.getBool('sg_enabled') ?? true;
+    _sgEnabled = prefs.getBool('sg_enabled') ?? false;
     notifyListeners();
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../constants/lmp_constants.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
 import '../services/preset_service.dart';
@@ -20,18 +21,166 @@ class _ParametersScreenState extends State<ParametersScreen> {
   final _formKey    = GlobalKey<FormState>();
   final _controllers = <String, TextEditingController>{};
 
+  // SG filter display options: label → windowSize value
+  static const _sgOptions = <String, int>{
+    'None':            -1,
+    'Spike rejection':  0,
+    'Low':              5,
+    'Medium':           9,
+    'High':            15,
+    'Very high':       25,
+  };
+
+  bool   _sgOn     = false;
+  int    _sgWindow = -1;
+  double _rtiaKOhm = 35.0;
+
   @override
   void initState() {
     super.initState();
     for (final p in modeParameters[widget.mode]!) {
       _controllers[p.key] = TextEditingController();
     }
+    final mp = context.read<MeasurementProvider>();
+    _sgOn     = mp.sgEnabled;
+    _sgWindow = mp.sgFilterWindow;
+    final gc = mp.selectedGainCode;
+    _rtiaKOhm = kRtiaRanges
+        .firstWhere(
+          (r) => rtiaToGainCode(r.rtiaKOhm) == gc,
+          orElse: () => kRtiaRanges[4], // 35 kΩ
+        )
+        .rtiaKOhm;
+  }
+
+  void _applyToProvider() {
+    final mp = context.read<MeasurementProvider>();
+    mp.setSgEnabled(_sgOn);
+    mp.setSgFilterWindow(_sgOn ? _sgWindow : -1);
+    mp.setSelectedGainCode(rtiaToGainCode(_rtiaKOhm));
   }
 
   @override
   void dispose() {
     for (final c in _controllers.values) c.dispose();
     super.dispose();
+  }
+
+  // ── Hardware controls (current range + SG filter) ─────────────────────────
+
+  Widget _buildHardwareControls() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('CURRENT RANGE',
+            style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8)),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<double>(
+          value: _rtiaKOhm,
+          dropdownColor: AppColors.surface,
+          style: const TextStyle(color: Colors.white, fontSize: 14),
+          decoration: InputDecoration(
+            filled: true,
+            fillColor: AppColors.surface,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: AppColors.divider),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: AppColors.divider),
+            ),
+            prefixIcon: const Icon(Icons.electric_bolt_outlined,
+                color: AppColors.accent2, size: 18),
+          ),
+          items: kRtiaRanges
+              .map((r) => DropdownMenuItem(
+                    value: r.rtiaKOhm,
+                    child: Text(
+                      '±${r.rangeUA % 1 == 0 ? r.rangeUA.toInt() : r.rangeUA} µA',
+                    ),
+                  ))
+              .toList(),
+          onChanged: (v) {
+            if (v == null) return;
+            setState(() => _rtiaKOhm = v);
+            _applyToProvider();
+          },
+        ),
+        const SizedBox(height: 16),
+        const Text('REAL-TIME SG FILTER',
+            style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8)),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            const Expanded(
+              child: Text('Real-time SG Filter',
+                  style: TextStyle(color: Colors.white, fontSize: 14)),
+            ),
+            Switch(
+              value: _sgOn,
+              onChanged: (v) {
+                setState(() => _sgOn = v);
+                _applyToProvider();
+              },
+              activeColor: AppColors.accent1,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+          ],
+        ),
+        AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          child: _sgOn
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 4, bottom: 4),
+                  child: DropdownButtonFormField<int>(
+                    value: _sgWindow,
+                    dropdownColor: AppColors.surface,
+                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: AppColors.surface,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: AppColors.divider),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                            const BorderSide(color: AppColors.divider),
+                      ),
+                    ),
+                    items: _sgOptions.entries
+                        .map((e) => DropdownMenuItem(
+                              value: e.value,
+                              child: Text(e.key),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _sgWindow = v);
+                      _applyToProvider();
+                    },
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -56,14 +205,21 @@ class _ParametersScreenState extends State<ParametersScreen> {
         child: Column(
           children: [
             Expanded(
-              child: ListView.separated(
+              child: ListView(
                 padding: const EdgeInsets.all(16),
-                itemCount: params.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 16),
-                itemBuilder: (_, i) => _ParameterField(
-                  parameter:  params[i],
-                  controller: _controllers[params[i].key]!,
-                ),
+                children: [
+                  _buildHardwareControls(),
+                  const SizedBox(height: 8),
+                  const Divider(color: AppColors.divider, height: 1),
+                  const SizedBox(height: 16),
+                  for (int i = 0; i < params.length; i++) ...[
+                    _ParameterField(
+                      parameter:  params[i],
+                      controller: _controllers[params[i].key]!,
+                    ),
+                    if (i < params.length - 1) const SizedBox(height: 16),
+                  ],
+                ],
               ),
             ),
             _StartButton(onPressed: _onStart),
