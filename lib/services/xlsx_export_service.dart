@@ -5,123 +5,133 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/project_session.dart';
 
+/// Exports all visible measurements as an XLSX workbook.
+///
+/// Sheet layout (PalmSens-compatible, side-by-side):
+///   Row 1 (labels):  SeriesName1,,SeriesName2,,…  (alternating A/C/E…)
+///   Row 2 (units):   V,µA,V,µA,…
+///   Row 3+  (data):  x1,y1,x2,y2,…
+///
+/// Units: mV→V, nA→µA.
 class XlsxExportService {
-  static Future<void> export(ProjectSession project) async {
-    final excel = Excel.createExcel();
-    excel.delete('Sheet1');
+  static Future<void> export(
+    ProjectSession project, {
+    Set<int>?    hiddenMeasurements,
+    Set<String>? hiddenCycles,
+  }) async {
+    final hidden   = hiddenMeasurements ?? const <int>{};
+    final hiddenCy = hiddenCycles       ?? const <String>{};
+    final isCv     = project.modeName == 'CV';
+    final isCa     = project.modeName == 'CA';
+    final xUnit    = isCa ? 's' : 'V';
+    const yUnit    = 'µA';
 
-    for (var i = 0; i < project.measurements.length; i++) {
-      final session   = project.measurements[i];
-      final sheetName = 'Scan ${i + 1}';
-      final sheet     = excel[sheetName];
-      final isCa      = session.mode == 'CA';
-      final isCv      = session.mode == 'CV';
-
-      // ── Section 1: Header metadata ────────────────────────────────────────
-      sheet.appendRow([TextCellValue('Date and time:'),
-          TextCellValue(session.startedAt.toIso8601String())]);
-      sheet.appendRow([TextCellValue('Technique:'), TextCellValue(session.mode)]);
-      if (session.label.isNotEmpty) {
-        sheet.appendRow([TextCellValue('Label:'), TextCellValue(session.label)]);
-      }
-      for (final entry in session.parameters.entries) {
-        sheet.appendRow([TextCellValue('${entry.key}:'), DoubleCellValue(entry.value)]);
-      }
-
-      // ── Section 2: Experiment Summary ─────────────────────────────────────
-      final ipa = project.ipa;
-      final ipc = project.ipc;
-      final epa = project.epa;
-      final epc = project.epc;
-      final hasSummary = ipa != null || ipc != null || epa != null || epc != null;
-      if (hasSummary) {
-        sheet.appendRow([TextCellValue('')]);
-        sheet.appendRow([TextCellValue('Experiment Summary')]);
-        if (ipa != null) sheet.appendRow([TextCellValue('Ipa (µA):'), DoubleCellValue(ipa)]);
-        if (ipc != null) sheet.appendRow([TextCellValue('Ipc (µA):'), DoubleCellValue(ipc)]);
-        if (epa != null) sheet.appendRow([TextCellValue('Epa (mV):'), DoubleCellValue(epa)]);
-        if (epc != null) sheet.appendRow([TextCellValue('Epc (mV):'), DoubleCellValue(epc)]);
-      }
-
-      // ── Section 3: Raw data ───────────────────────────────────────────────
-      sheet.appendRow([TextCellValue('')]);
-      sheet.appendRow([
-        TextCellValue(isCa ? 'Time (ms)' : 'Potential (mV)'),
-        TextCellValue('Current (nA)'),
-      ]);
+    final series = <_Series>[];
+    int sn = 1;
+    for (int mIdx = 0; mIdx < project.measurements.length; mIdx++) {
+      if (hidden.contains(mIdx)) continue;
+      final session = project.measurements[mIdx];
 
       if (isCv) {
         final cycles = session.cycles.toList()..sort();
         for (final cNum in cycles) {
-          sheet.appendRow([TextCellValue('Cycle $cNum')]);
-          for (final pt in session.points.where((p) => p.cycle == cNum)) {
-            sheet.appendRow([DoubleCellValue(pt.x), DoubleCellValue(pt.y)]);
-          }
+          if (hiddenCy.contains('$mIdx:$cNum')) continue;
+          final pts = session.points.where((p) => p.cycle == cNum).toList();
+          if (pts.isEmpty) continue;
+          final name = cycles.length == 1
+              ? 'Cyclic Voltammetry [$sn]: ${session.displayName}'
+              : 'Cyclic Voltammetry [$sn]: ${session.displayName} — Cycle $cNum';
+          series.add(_Series(
+            name:      name,
+            timestamp: session.startedAt,
+            xs:        pts.map((p) => p.x / 1000).toList(),
+            ys:        pts.map((p) => p.y / 1000).toList(),
+          ));
+          sn++;
         }
       } else {
-        for (final pt in session.points) {
-          sheet.appendRow([DoubleCellValue(pt.x), DoubleCellValue(pt.y)]);
+        if (session.points.isEmpty) continue;
+        final pts = session.points
+            .where((p) => p.cycle == null || !hiddenCy.contains('$mIdx:${p.cycle}'))
+            .toList();
+        if (pts.isEmpty) continue;
+        series.add(_Series(
+          name:      '${project.modeName} [$sn]: ${session.displayName}',
+          timestamp: session.startedAt,
+          xs:        pts.map((p) => p.x / 1000).toList(),
+          ys:        pts.map((p) => p.y / 1000).toList(),
+        ));
+        sn++;
+      }
+    }
+
+    if (series.isEmpty) throw Exception('No visible data to export');
+
+    final excel = Excel.createExcel();
+    excel.delete('Sheet1');
+    final sheet = excel[project.modeName];
+
+    // Row 1: label row — series names in columns A, C, E, …
+    final labelRow = <CellValue?>[];
+    for (final s in series) {
+      labelRow.add(TextCellValue(s.name));
+      labelRow.add(TextCellValue(''));
+    }
+    sheet.appendRow(labelRow);
+
+    // Row 2: unit row — V, µA alternating
+    final unitRow = <CellValue?>[];
+    for (int i = 0; i < series.length; i++) {
+      unitRow.add(TextCellValue(xUnit));
+      unitRow.add(TextCellValue(yUnit));
+    }
+    sheet.appendRow(unitRow);
+
+    // Data rows
+    final maxLen = series.map((s) => s.xs.length).reduce((a, b) => a > b ? a : b);
+    for (int row = 0; row < maxLen; row++) {
+      final dataRow = <CellValue?>[];
+      for (final s in series) {
+        if (row < s.xs.length) {
+          dataRow.add(DoubleCellValue(s.xs[row]));
+          dataRow.add(DoubleCellValue(s.ys[row]));
+        } else {
+          dataRow.add(null);
+          dataRow.add(null);
         }
       }
-    }
-
-    // ── Peaks sheet (manual point annotations) ─────────────────────────────
-    if (project.peaks.isNotEmpty) {
-      final peakSheet = excel['Peak Annotations'];
-      peakSheet.appendRow([
-        TextCellValue('Scan'),
-        TextCellValue('Type'),
-        TextCellValue('Potential (mV)'),
-        TextCellValue('Current (nA)'),
-      ]);
-      for (final peak in project.peaks) {
-        peakSheet.appendRow([
-          IntCellValue(peak.measurementIndex + 1),
-          TextCellValue(peak.type == PeakType.cathodic ? 'Cathodic' : 'Anodic'),
-          DoubleCellValue(peak.point.x),
-          DoubleCellValue(peak.point.y),
-        ]);
-      }
-    }
-
-    // ── Registered peaks sheet (tangent-method) ───────────────────────────
-    if (project.registeredPeaks.isNotEmpty) {
-      final regSheet = excel['Registered Peaks'];
-      regSheet.appendRow([
-        TextCellValue('Scan'),
-        TextCellValue('Type'),
-        TextCellValue('Ep (V)'),
-        TextCellValue('ip (µA)'),
-      ]);
-      for (final pk in project.registeredPeaks) {
-        regSheet.appendRow([
-          IntCellValue(pk.measurementIdx + 1),
-          TextCellValue(pk.effectivePeakType == PeakType.cathodic ? 'Cathodic' : 'Anodic'),
-          DoubleCellValue(pk.ep),
-          DoubleCellValue(pk.ip),
-        ]);
-      }
+      sheet.appendRow(dataRow);
     }
 
     final bytes = excel.encode();
     if (bytes == null) throw Exception('Failed to encode workbook');
 
-    final dir = await getTemporaryDirectory();
-    final timestamp = DateTime.now()
+    final dir  = await getTemporaryDirectory();
+    final ts   = DateTime.now()
         .toIso8601String()
         .replaceAll(':', '-')
         .replaceAll('.', '-');
-    final fileName = 'ebstat_${project.modeName}_$timestamp.xlsx';
-    final file = File('${dir.path}/$fileName');
+    final file = File('${dir.path}/ebstat_${project.modeName}_$ts.xlsx');
     await file.writeAsBytes(bytes);
 
-    await SharePlus.instance.share(
-      ShareParams(
-        files: [XFile(file.path,
-            mimeType:
-                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
-        subject: 'EbStat — ${project.modeName} project data',
-      ),
-    );
+    await SharePlus.instance.share(ShareParams(
+      files:   [XFile(file.path,
+          mimeType:
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')],
+      subject: 'EbStat — ${project.modeName} project data',
+    ));
   }
+}
+
+class _Series {
+  final String name;
+  final DateTime timestamp;
+  final List<double> xs;
+  final List<double> ys;
+  const _Series({
+    required this.name,
+    required this.timestamp,
+    required this.xs,
+    required this.ys,
+  });
 }

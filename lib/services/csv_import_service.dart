@@ -52,6 +52,11 @@ class CsvImportService {
         .replaceAll('\r', '\n')
         .split('\n');
 
+    // New EbStat firmware multi-block format: has Label: on line 3.
+    if (_isNewFirmwareFormat(lines)) {
+      return _parseNewFirmwareFormat(lines);
+    }
+
     // Detect PalmSens format and normalise to canonical EbStat layout.
     lines = _detectAndNormalize(lines);
 
@@ -223,6 +228,129 @@ class CsvImportService {
     }
 
     return project;
+  }
+
+  // ── New firmware format ───────────────────────────────────────────────────────
+
+  /// New EbStat firmware CSV: `Date and time:` / `Technique:` / `Label:` header,
+  /// `Potential (mV),Current (nA)` column header, `Cycle N` markers, mV/nA data,
+  /// blocks separated by `---`.
+  static bool _isNewFirmwareFormat(List<String> lines) {
+    if (lines.length < 3) return false;
+    return lines[0].trim().startsWith('Date and time:,') &&
+        lines[1].trim().startsWith('Technique:,') &&
+        lines[2].trim().startsWith('Label:,');
+  }
+
+  static ProjectSession _parseNewFirmwareFormat(List<String> allLines) {
+    // Split on '---' separators
+    final blocks = <List<String>>[];
+    var cur = <String>[];
+    for (final line in allLines) {
+      if (line.trim() == '---') {
+        if (cur.any((l) => l.trim().isNotEmpty)) blocks.add(cur);
+        cur = [];
+      } else {
+        cur.add(line);
+      }
+    }
+    if (cur.any((l) => l.trim().isNotEmpty)) blocks.add(cur);
+
+    if (blocks.isEmpty) {
+      throw const CsvImportException('File contains no measurement data');
+    }
+
+    String technique = 'CV';
+    for (final line in blocks[0]) {
+      final t = line.trim();
+      if (t.startsWith('Technique:,')) {
+        technique = t.substring('Technique:,'.length).trim().toUpperCase();
+        break;
+      }
+    }
+    if (!_knownTechniques.contains(technique)) {
+      throw CsvImportException('Unsupported technique: $technique');
+    }
+
+    final project = ProjectSession(modeName: technique);
+    for (final block in blocks) {
+      final session = _parseFirmwareBlock(block, technique);
+      if (session != null) project.addMeasurement(session);
+    }
+
+    if (project.measurements.isEmpty) {
+      throw const CsvImportException('File contains no measurement data');
+    }
+    return project;
+  }
+
+  static MeasurementSession? _parseFirmwareBlock(
+      List<String> blockLines, String technique) {
+    String?  label;
+    DateTime startedAt = DateTime.now();
+    final    parameters = <String, double>{};
+    final    lines = blockLines.map((l) => l.trimRight()).toList();
+    int li = 0;
+
+    // Parse metadata until empty line or column header
+    while (li < lines.length) {
+      final raw = lines[li].trim();
+      if (raw.isEmpty || raw == 'Potential (mV),Current (nA)') break;
+      if (raw.startsWith('Date and time:,')) {
+        startedAt =
+            _parseTimestamp(raw.substring('Date and time:,'.length)) ??
+                DateTime.now();
+      } else if (raw.startsWith('Label:,')) {
+        label = raw.substring('Label:,'.length).trim();
+      } else if (!raw.startsWith('Technique:,') && raw.contains(':,')) {
+        final ci  = raw.indexOf(':,');
+        final key = raw.substring(0, ci);
+        final val = double.tryParse(raw.substring(ci + 2));
+        if (val != null) parameters[key] = val;
+      }
+      li++;
+    }
+
+    // Consume empty line + column header
+    if (li < lines.length && lines[li].trim().isEmpty) li++;
+    if (li < lines.length &&
+        lines[li].trim() == 'Potential (mV),Current (nA)') li++;
+
+    if (label == null || label.isEmpty) return null;
+
+    final points      = <MeasurementPoint>[];
+    int  currentCycle = 1;
+    final isCv        = technique == 'CV';
+
+    while (li < lines.length) {
+      final raw = lines[li++].trim();
+      if (raw.isEmpty) continue;
+      if (isCv && raw.startsWith('Cycle ')) {
+        currentCycle = int.tryParse(raw.substring(6).trim()) ?? currentCycle;
+        continue;
+      }
+      final cols = raw.split(',');
+      if (cols.length >= 2) {
+        final x = double.tryParse(cols[0].trim());
+        final y = double.tryParse(cols[1].trim());
+        if (x != null && y != null) {
+          // Data is already in mV and nA — no conversion needed.
+          points.add(MeasurementPoint(x, y,
+              cycle: isCv ? currentCycle : null));
+        }
+      }
+    }
+
+    if (points.isEmpty) return null;
+
+    return MeasurementSession(
+      mode:        technique,
+      label:       label,
+      displayName: label,
+      parameters:  parameters,
+      startedAt:   startedAt,
+      points:      points,
+    );
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────

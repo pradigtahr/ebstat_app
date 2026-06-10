@@ -593,26 +593,8 @@ class MeasurementProvider extends ChangeNotifier {
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Annotations / project
+  // Project mutations
   // ═══════════════════════════════════════════════════════════════════════════
-
-  void annotatePoint(int measurementIndex, int pointIndex, PeakType type) {
-    if (_project == null) return;
-    final session = _project!.measurements[measurementIndex];
-    if (pointIndex >= session.points.length) return;
-    _project!.annotatePeak(PeakAnnotation(
-      measurementIndex: measurementIndex,
-      pointIndex:       pointIndex,
-      type:             type,
-      point:            session.points[pointIndex],
-    ));
-    notifyListeners();
-  }
-
-  void removePeakAnnotation(int measurementIndex, PeakType type) {
-    _project?.removePeak(measurementIndex, type);
-    notifyListeners();
-  }
 
   void deleteMeasurement(int index) {
     _project?.deleteMeasurement(index);
@@ -623,8 +605,6 @@ class MeasurementProvider extends ChangeNotifier {
     final session = _project?.measurements[measurementIndex];
     if (session == null) return;
     session.deleteCycle(cycleNum);
-    // Remove peak annotations for this measurement conservatively
-    _project?.peaks.removeWhere((p) => p.measurementIndex == measurementIndex);
     if (session.points.isEmpty) {
       deleteMeasurement(measurementIndex);
       return;
