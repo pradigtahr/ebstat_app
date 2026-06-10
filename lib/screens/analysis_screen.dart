@@ -58,6 +58,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   ProjectSession?  _lastProjectRef;
   String?          _lastTechnique;
+  int              _lastMeasCount = 0;
 
   final GlobalKey _chartKey = GlobalKey(); // RepaintBoundary key for capture
 
@@ -83,9 +84,13 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   void _maybeRedetect(ProjectSession? project, String? technique) {
     if (project == null || technique == null) return;
-    if (identical(project, _lastProjectRef) && technique == _lastTechnique) return;
+    final measCount = project.measurements.length;
+    if (identical(project, _lastProjectRef) &&
+        technique == _lastTechnique &&
+        measCount == _lastMeasCount) return;
     _lastProjectRef = project;
     _lastTechnique  = technique;
+    _lastMeasCount  = measCount;
     final fresh = <PeakResult>[];
     for (int i = 0; i < project.measurements.length; i++) {
       fresh.addAll(PeakFinder.analyze(project.measurements[i], i, technique));
@@ -309,16 +314,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
                 Expanded(
                   flex: 3,
-                  child: _MeasurementTree(
-                    project:            project,
-                    provider:           provider,
-                    isCv:               isCv,
-                    hiddenMeasurements: _hiddenMeasurements,
-                    hiddenCycles:       _hiddenCycles,
-                    onToggleMeas:       _toggleMeas,
-                    onToggleCycle:      _toggleCycle,
-                    onDeleteMeas: (i) => _confirmDeleteMeas(i, provider),
-                    onDeleteCycle: (m, c) => _confirmDeleteCycle(m, c, provider),
+                  child: RepaintBoundary(
+                    child: _MeasurementTree(
+                      project:            project,
+                      provider:           provider,
+                      isCv:               isCv,
+                      hiddenMeasurements: _hiddenMeasurements,
+                      hiddenCycles:       _hiddenCycles,
+                      onToggleMeas:       _toggleMeas,
+                      onToggleCycle:      _toggleCycle,
+                      onDeleteMeas: (i) => _confirmDeleteMeas(i, provider),
+                      onDeleteCycle: (m, c) => _confirmDeleteCycle(m, c, provider),
+                    ),
                   ),
                 ),
 
@@ -534,7 +541,7 @@ const double _kBottomInset = _kBottomReserved + _kAxisNameSize; // 46
 const double _kTopInset    = _kTopReserved;                     // 16
 const double _kRightInset  = _kRightReserved;                   // 24
 
-class _OverlayChart extends StatelessWidget {
+class _OverlayChart extends StatefulWidget {
   const _OverlayChart({
     required this.project,
     required this.hiddenMeasurements,
@@ -566,7 +573,45 @@ class _OverlayChart extends StatelessWidget {
   final bool exportMode;
 
   @override
+  State<_OverlayChart> createState() => _OverlayChartState();
+}
+
+class _OverlayChartState extends State<_OverlayChart> {
+  // ── FlSpot cache — invalidated per-series when point count changes ──────────
+  final Map<String, List<FlSpot>> _spotCache = {};
+  final Map<String, int>          _spotLen   = {};
+
+  // ── Axis bounds cache — recomputed only when spot cache is invalidated ──────
+  double? _axisMinX, _axisMaxX, _axisMinY, _axisMaxY;
+  bool    _axisDirty = true;
+
+  List<FlSpot> _cachedSpots(String key, List<MeasurementPoint> pts) {
+    if (_spotLen[key] != pts.length) {
+      _spotCache[key] = List<FlSpot>.unmodifiable(
+          pts.map((p) => FlSpot(p.x, p.y)));
+      _spotLen[key]   = pts.length;
+      _axisDirty      = true;
+    }
+    return _spotCache[key]!;
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Capture widget fields into locals for use in closures below.
+    final project            = widget.project;
+    final hiddenMeasurements = widget.hiddenMeasurements;
+    final hiddenCycles       = widget.hiddenCycles;
+    final isCv               = widget.isCv;
+    final showSg             = widget.showSg;
+    final xLabel             = widget.xLabel;
+    final yLabel             = widget.yLabel;
+    final onPointTapped      = widget.onPointTapped;
+    final detectedPeaks      = widget.detectedPeaks;
+    final onEditPeak         = widget.onEditPeak;
+    final bubbleOffsets      = widget.bubbleOffsets;
+    final onBubbleMoved      = widget.onBubbleMoved;
+    final exportMode         = widget.exportMode;
+
     final barMetas     = <_BarMeta>[];
     final bars         = <LineChartBarData>[];
     final peaks        = project.peaks;
@@ -596,7 +641,7 @@ class _OverlayChart extends StatelessWidget {
           final peaksForMeas = peaks.where((p) => p.measurementIndex == mIdx);
 
           bars.add(LineChartBarData(
-            spots: cyclePts.map((p) => FlSpot(p.x, p.y)).toList(),
+            spots: _cachedSpots('$mIdx:$cNum', cyclePts),
             isCurved: true, curveSmoothness: 0.2,
             color: color, barWidth: 2,
             dotData: FlDotData(
@@ -646,7 +691,7 @@ class _OverlayChart extends StatelessWidget {
         final indices = List<int>.generate(session.points.length, (i) => i);
 
         bars.add(LineChartBarData(
-          spots: session.points.map((p) => FlSpot(p.x, p.y)).toList(),
+          spots: _cachedSpots('$mIdx', session.points),
           isCurved: true, curveSmoothness: 0.2,
           color: color, barWidth: 2,
           dotData: FlDotData(
@@ -748,13 +793,39 @@ class _OverlayChart extends StatelessWidget {
       );
     }
 
-    final allSpots = bars.expand((b) => b.spots).toList();
-    final xs = allSpots.map((s) => s.x);
-    final ys = allSpots.map((s) => s.y);
-    final minX = xs.reduce(min);
-    final maxX = xs.reduce(max);
-    final minY = ys.reduce(min);
-    final maxY = ys.reduce(max);
+    // Recompute axis bounds only when cached spot lists changed.
+    if (_axisDirty) {
+      _axisDirty = false;
+      // Only iterate data bars (skip overlay/baseline bars that were added after
+      // the cache block). The data bars are the first N entries added via
+      // _cachedSpots; iterate the spot cache directly to avoid re-scanning bars.
+      double? rxMin, rxMax, ryMin, ryMax;
+      for (final spots in _spotCache.values) {
+        for (final s in spots) {
+          if (rxMin == null || s.x < rxMin) rxMin = s.x;
+          if (rxMax == null || s.x > rxMax) rxMax = s.x;
+          if (ryMin == null || s.y < ryMin) ryMin = s.y;
+          if (ryMax == null || s.y > ryMax) ryMax = s.y;
+        }
+      }
+      if (rxMin != null) {
+        _axisMinX = rxMin; _axisMaxX = rxMax;
+        _axisMinY = ryMin; _axisMaxY = ryMax;
+      }
+    }
+
+    // Fall back to scanning bars if cache is unpopulated (first frame).
+    double minX, maxX, minY, maxY;
+    if (_axisMinX != null) {
+      minX = _axisMinX!; maxX = _axisMaxX!;
+      minY = _axisMinY!; maxY = _axisMaxY!;
+    } else {
+      final allSpots = bars.expand((b) => b.spots).toList();
+      final xs = allSpots.map((s) => s.x);
+      final ys = allSpots.map((s) => s.y);
+      minX = xs.reduce(min); maxX = xs.reduce(max);
+      minY = ys.reduce(min); maxY = ys.reduce(max);
+    }
     final xPad = max((maxX - minX) * 0.08, 1.0);
     final yPad = max((maxY - minY) * 0.12, 0.1);
 
@@ -1088,14 +1159,23 @@ class _DraggableBubbleLayer extends StatefulWidget {
 
 class _DraggableBubbleLayerState extends State<_DraggableBubbleLayer> {
   String? _activeKey;
+  Offset  _liveDelta = Offset.zero; // accumulated during this pan gesture
 
   @override
   Widget build(BuildContext context) {
+    // During an active drag, blend the in-flight delta into the display offsets
+    // so the bubble follows the finger without touching the parent's setState.
+    final combined = Map<String, Offset>.from(widget.userOffsets);
+    if (_activeKey != null && _liveDelta != Offset.zero) {
+      combined[_activeKey!] =
+          (combined[_activeKey!] ?? Offset.zero) + _liveDelta;
+    }
+
     return LayoutBuilder(builder: (ctx, constraints) {
       final size = Size(constraints.maxWidth, constraints.maxHeight);
       final painter = _PeakBubblePainter(
         specs: widget.specs,
-        userOffsets: widget.userOffsets,
+        userOffsets: combined,
         minX: widget.minX, maxX: widget.maxX,
         minY: widget.minY, maxY: widget.maxY,
         exportMode: false,
@@ -1105,19 +1185,30 @@ class _DraggableBubbleLayerState extends State<_DraggableBubbleLayer> {
         behavior: HitTestBehavior.translucent,
         onPanStart: (d) {
           final layouts = painter.computeLayouts(size);
-          _activeKey = null;
           for (int i = 0; i < widget.specs.length; i++) {
             if (layouts[i].rect.inflate(8).contains(d.localPosition)) {
-              _activeKey = widget.specs[i].peakKey;
-              break;
+              setState(() {
+                _activeKey = widget.specs[i].peakKey;
+                _liveDelta = Offset.zero;
+              });
+              return;
             }
           }
         },
         onPanUpdate: (d) {
-          if (_activeKey != null) widget.onMoved(_activeKey!, d.delta);
+          if (_activeKey != null) {
+            setState(() => _liveDelta += d.delta); // repaints only this layer
+          }
         },
-        onPanEnd:    (_) { _activeKey = null; },
-        onPanCancel: ()  { _activeKey = null; },
+        onPanEnd: (_) {
+          if (_activeKey != null) {
+            widget.onMoved(_activeKey!, _liveDelta); // one parent notification on release
+            setState(() { _activeKey = null; _liveDelta = Offset.zero; });
+          }
+        },
+        onPanCancel: () {
+          setState(() { _activeKey = null; _liveDelta = Offset.zero; });
+        },
         child: CustomPaint(painter: painter),
       );
     });

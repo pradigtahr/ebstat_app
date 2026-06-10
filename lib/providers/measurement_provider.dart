@@ -42,6 +42,7 @@ class MeasurementProvider extends ChangeNotifier {
   Timer?                              _demoTimer;
   Timer?                              _sgTimer;
   Timer?                              _silenceTimer;
+  Timer?                              _updateTimer;     // 50 ms UI-flush during live BLE run
   bool                                _progressReceived = false;
   bool                                _runCompleted     = false;
   VoidCallback?                       _navigateToAnalysis;
@@ -255,7 +256,7 @@ class MeasurementProvider extends ChangeNotifier {
               pt = MeasurementPoint(x, y);
             }
             _session!.points.add(pt);
-            notifyListeners();
+            // notifyListeners deferred to _updateTimer (50 ms batch)
           }
         }
       } else if (_state == MeasurementState.done) {
@@ -267,6 +268,12 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = BleService().progressStream.listen((prog) {
       _progress = prog;
       notifyListeners();
+    });
+
+    // Flush buffered points to UI at ≤20 fps — prevents per-point setState at high scan rates
+    _updateTimer?.cancel();
+    _updateTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      if (_state == MeasurementState.running) notifyListeners();
     });
 
     BleService()
@@ -297,6 +304,8 @@ class MeasurementProvider extends ChangeNotifier {
     if (_runCompleted) return; // already handled (e.g. via # DONE line)
     _runCompleted = true;
     _cancelSilenceTimer();
+    _updateTimer?.cancel();
+    _updateTimer = null;
     _progressSub?.cancel();
     _progressSub = null;
     _progress    = null;
@@ -328,6 +337,8 @@ class MeasurementProvider extends ChangeNotifier {
 
   void _onBleRunError(Object error) {
     _cancelSilenceTimer();
+    _updateTimer?.cancel();
+    _updateTimer = null;
     _dataSub?.cancel();
     _dataSub = null;
     _progressSub?.cancel();
@@ -515,6 +526,8 @@ class MeasurementProvider extends ChangeNotifier {
   void stopMeasurement() {
     if (BleService().isConnected && _state == MeasurementState.running) {
       _cancelSilenceTimer();
+      _updateTimer?.cancel();
+      _updateTimer = null;
       BleService().sendStop();
       // State transitions in _onBleRunComplete when ABORTED arrives
       return;
@@ -527,6 +540,8 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _updateTimer?.cancel();
+    _updateTimer = null;
     _cancelSilenceTimer();
     if (_session != null && _session!.points.isNotEmpty) {
       _project?.addMeasurement(_session!);
@@ -546,6 +561,8 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _updateTimer?.cancel();
+    _updateTimer = null;
     _cancelSilenceTimer();
     _project      = project;
     _selectedMode = mode;
@@ -565,6 +582,8 @@ class MeasurementProvider extends ChangeNotifier {
     _progressSub = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    _updateTimer?.cancel();
+    _updateTimer = null;
     _cancelSilenceTimer();
     _session     = null;
     _state       = MeasurementState.idle;
@@ -638,6 +657,7 @@ class MeasurementProvider extends ChangeNotifier {
     _dataSub?.cancel();
     _progressSub?.cancel();
     _sgTimer?.cancel();
+    _updateTimer?.cancel();
     _silenceTimer?.cancel();
     super.dispose();
   }
