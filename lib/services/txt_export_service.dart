@@ -24,9 +24,9 @@ class TxtExportService {
       buf.writeln();
 
       // Section 2 – series name / date / units
-      buf.writeln(isCa ? 'Time/Current' : 'Potential/Current');
+      buf.writeln(isCa ? 'time_s/Current' : 'Potential/Current');
       buf.writeln('Date');
-      buf.writeln(isCa ? 's,µA' : 'V,µA');
+      buf.writeln(isCa ? 'time_s,µA' : 'V,µA');
 
       // Section 3 – data rows (convert mV→V, nA→µA)
       final isCv = session.mode == 'CV';

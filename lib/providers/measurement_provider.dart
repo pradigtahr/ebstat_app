@@ -311,6 +311,13 @@ class MeasurementProvider extends ChangeNotifier {
     _progress    = null;
 
     if (_session != null && _session!.points.isNotEmpty) {
+      if (_selectedMode?.abbreviation == 'CA' && _session!.points.length > 1) {
+        final t0 = _session!.points.first.x;
+        final normalized = _session!.points
+            .map((p) => MeasurementPoint(p.x - t0, p.y))
+            .toList();
+        _session!.points..clear()..addAll(normalized);
+      }
       _project?.addMeasurement(_session!);
       try {
         await TranscriptService.save(

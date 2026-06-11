@@ -204,14 +204,17 @@ class CsvImportService {
         ));
       }
     } else {
-      // Non-CV: one series → one measurement; CA: s→ms, others: V→mV
+      // Non-CV: one series → one measurement; CA: s→ms (after t0 subtraction), others: V→mV
+      final isCaMode = technique == 'CA';
       for (int si = 0; si < n; si++) {
         final xs = seriesXs[si];
         final ys = seriesYs[si];
         if (xs.isEmpty) continue;
         final pts = <MeasurementPoint>[];
+        final t0 = (isCaMode && xs.isNotEmpty) ? xs[0] : 0.0;
         for (int i = 0; i < xs.length; i++) {
-          pts.add(MeasurementPoint(xs[i] * 1000, ys[i] * 1000));
+          final xNorm = isCaMode ? xs[i] - t0 : xs[i];
+          pts.add(MeasurementPoint(xNorm * 1000, ys[i] * 1000));
         }
         project.addMeasurement(MeasurementSession(
           mode:        technique,
@@ -321,6 +324,7 @@ class CsvImportService {
     final points      = <MeasurementPoint>[];
     int  currentCycle = 1;
     final isCv        = technique == 'CV';
+    double? caT0;
 
     while (li < lines.length) {
       final raw = lines[li++].trim();
@@ -334,8 +338,12 @@ class CsvImportService {
         final x = double.tryParse(cols[0].trim());
         final y = double.tryParse(cols[1].trim());
         if (x != null && y != null) {
-          // Data is already in mV and nA — no conversion needed.
-          points.add(MeasurementPoint(x, y,
+          double xFinal = x;
+          if (technique == 'CA') {
+            caT0 ??= x;
+            xFinal = x - caT0!;
+          }
+          points.add(MeasurementPoint(xFinal, y,
               cycle: isCv ? currentCycle : null));
         }
       }

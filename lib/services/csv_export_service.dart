@@ -29,7 +29,7 @@ class CsvExportService {
     final hiddenCy = hiddenCycles       ?? const <String>{};
     final isCv     = project.modeName == 'CV';
     final isCa     = project.modeName == 'CA';
-    final xUnit    = isCa ? 's' : 'V';
+    final xUnit    = isCa ? 'time_s' : 'V';
     const yUnit    = 'µA';
 
     final series = <_Series>[];
