@@ -229,16 +229,16 @@ class EbstatProtocol {
   static const Map<String, List<dynamic>> techniqueDefaults = {
     FwCmd.ca:  [0,    200,  2000, 100, 50],   // E_quiet, E_step, quiet_ms, step_ms, samples_per_stage
     FwCmd.cv:  [-200, 500,  5,    50,  1],     // V_start, V_vertex, step_mV, rate, n_cycles
-    FwCmd.npv: [-200, 600,  10,   50,  5],     // E_start, E_end, dE_step, dE_pulse, freq_hz
-    FwCmd.dpv: [-200, 600,  10,   50,  5],
-    FwCmd.swv: [-200, 600,  10,   50,  25],
+    FwCmd.npv: [-200, 600,  10,   50,  20,  50],   // E_start, E_end, dE_step, dE_pulse, t_pulse_ms, scan_rate_mV_s
+    FwCmd.dpv: [-300, 600,  5,    200, 20,  50],
+    FwCmd.swv: [-200, 600,  10,   50,  25],        // E_start, E_end, dE_step, dE_pulse, freq_hz
   };
 
   static const Map<String, List<String>> techniqueParamNames = {
     FwCmd.ca:  ['E_quiet_mV', 'E_step_mV', 'quiet_ms', 'step_ms', 'samples_per_stage'],
     FwCmd.cv:  ['V_start_mV', 'V_vertex_mV', 'step_mV', 'scan_rate_mV_s', 'n_cycles'],
-    FwCmd.npv: ['E_start_mV', 'E_end_mV', 'dE_step_mV', 'dE_pulse_mV', 'freq_hz'],
-    FwCmd.dpv: ['E_start_mV', 'E_end_mV', 'dE_step_mV', 'dE_pulse_mV', 'freq_hz'],
+    FwCmd.npv: ['E_start_mV', 'E_end_mV', 'dE_step_mV', 'dE_pulse_mV', 't_pulse_ms', 'scan_rate_mV_s'],
+    FwCmd.dpv: ['E_start_mV', 'E_end_mV', 'dE_step_mV', 'dE_pulse_mV', 't_pulse_ms', 'scan_rate_mV_s'],
     FwCmd.swv: ['E_start_mV', 'E_end_mV', 'dE_step_mV', 'dE_pulse_mV', 'freq_hz'],
   };
 
