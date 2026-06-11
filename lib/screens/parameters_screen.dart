@@ -24,7 +24,7 @@ class _ParametersScreenState extends State<ParametersScreen> {
   // SG filter display options: label → windowSize value
   static const _sgOptions = <String, int>{
     'None':            -1,
-    'Spike rejection':  0,
+    'Spike rejection':  1,
     'Low':              5,
     'Medium':           9,
     'High':            15,

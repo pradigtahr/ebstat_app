@@ -169,9 +169,10 @@ class MeasurementProvider extends ChangeNotifier {
     }
     if (_state != MeasurementState.running) return;
 
-    // Configure SG filter window if SG is enabled and a specific window is set.
-    // _sgFilterWindow: -1 = None (no SGSET), 0 = default, >0 = half_window size.
-    if (_sgEnabled && _sgFilterWindow > 0) {
+    // SG pre-commands: SGSET,<n>,2 + SGON when enabled with a strength preset
+    // (_sgFilterWindow > 0 for all active presets: 1,5,9,15,25), SGOFF otherwise.
+    final sgActive = _sgEnabled && _sgFilterWindow > 0;
+    if (sgActive) {
       try {
         await BleService().sendCommand('${FwCmd.sgset},$_sgFilterWindow,2');
       } catch (_) {
@@ -179,15 +180,12 @@ class MeasurementProvider extends ChangeNotifier {
       }
       if (_state != MeasurementState.running) return;
     }
-
-    // Send SG toggle — info command, resolves after 400 ms quiet period
-    final sgCmd = _sgEnabled ? FwCmd.sgon : FwCmd.sgoff;
     try {
-      await BleService().sendCommand(sgCmd);
+      await BleService().sendCommand(sgActive ? FwCmd.sgon : FwCmd.sgoff);
     } catch (_) {
-      // Best-effort: proceed even if SG command fails
+      // Best-effort
     }
-    if (_state != MeasurementState.running) return; // stopped during pre-cmd
+    if (_state != MeasurementState.running) return;
 
     final mode     = _selectedMode!.abbreviation;
     final paramMap = <String, dynamic>{
@@ -236,6 +234,10 @@ class MeasurementProvider extends ChangeNotifier {
         }
 
         if (FwTerminator.is_(line)) return;
+        if (trimmed.startsWith('SG,')) {
+          _parseSgLine(trimmed);
+          return;
+        }
         if (!headerSeen) { headerSeen = true; return; }
         _lastBleRow = line;
         final cols = line.split(',');
@@ -292,11 +294,11 @@ class MeasurementProvider extends ChangeNotifier {
     final idx     = int.tryParse(parts[1].trim());
     final current = double.tryParse(parts[2].trim());
     if (idx == null || current == null) return;
-    final sessions = _project?.measurements;
-    if (sessions == null || sessions.isEmpty) return;
-    final session = sessions.last;
-    while (session.sgPoints.length <= idx) session.sgPoints.add(null);
-    session.sgPoints[idx] = current;
+    // _session is set during run and remains until resetMeasurement().
+    final target = _session ?? _project?.measurements.lastOrNull;
+    if (target == null) return;
+    while (target.sgPoints.length <= idx) target.sgPoints.add(null);
+    target.sgPoints[idx] = current;
     notifyListeners();
   }
 

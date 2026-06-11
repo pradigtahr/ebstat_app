@@ -260,19 +260,20 @@ class _OverlayChartState extends State<_OverlayChart> {
           final cyclePts = session.points.where((p) => p.cycle == cNum).toList();
           if (cyclePts.isEmpty) { globalColorIdx++; continue; }
 
-          final color = kCycleColors[globalColorIdx % kCycleColors.length];
+          final color    = kCycleColors[globalColorIdx % kCycleColors.length];
+          final hasSgNow = showSg && cNum == 1 && session.hasSgData;
           bars.add(LineChartBarData(
             spots:           _cachedSpots('$mIdx:$cNum', cyclePts),
             isCurved:        true,
             curveSmoothness: 0.2,
-            color:           color,
-            barWidth:        2,
+            color:           hasSgNow ? color.withOpacity(0.3) : color,
+            barWidth:        hasSgNow ? 1.5 : 2,
             dotData:         const FlDotData(show: false),
-            belowBarData:    BarAreaData(show: true, color: color.withOpacity(0.05)),
+            belowBarData:    BarAreaData(show: !hasSgNow, color: color.withOpacity(0.05)),
           ));
           barMetas.add(_BarMeta(mIdx, cNum));
 
-          if (showSg && cNum == 1 && session.hasSgData) {
+          if (hasSgNow) {
             final sgSpots = <FlSpot>[];
             for (int i = 0; i < cyclePts.length && i < session.sgPoints.length; i++) {
               final sg = session.sgPoints[i];
@@ -283,10 +284,10 @@ class _OverlayChartState extends State<_OverlayChart> {
                 spots:           sgSpots,
                 isCurved:        true,
                 curveSmoothness: 0.3,
-                color:           Colors.white60,
-                barWidth:        1.5,
-                dashArray:       [4, 4],
+                color:           color,
+                barWidth:        2,
                 dotData:         const FlDotData(show: false),
+                belowBarData:    BarAreaData(show: true, color: color.withOpacity(0.05)),
               ));
               barMetas.add(_BarMeta(mIdx, null));
             }
@@ -295,17 +296,38 @@ class _OverlayChartState extends State<_OverlayChart> {
         }
       } else {
         if (session.points.isEmpty) { globalColorIdx++; continue; }
-        final color = kCycleColors[globalColorIdx % kCycleColors.length];
+        final color    = kCycleColors[globalColorIdx % kCycleColors.length];
+        final hasSgNow = showSg && session.hasSgData;
         bars.add(LineChartBarData(
           spots:           _cachedSpots('$mIdx', session.points),
           isCurved:        true,
           curveSmoothness: 0.2,
-          color:           color,
-          barWidth:        2,
+          color:           hasSgNow ? color.withOpacity(0.3) : color,
+          barWidth:        hasSgNow ? 1.5 : 2,
           dotData:         const FlDotData(show: false),
-          belowBarData:    BarAreaData(show: true, color: color.withOpacity(0.05)),
+          belowBarData:    BarAreaData(show: !hasSgNow, color: color.withOpacity(0.05)),
         ));
         barMetas.add(_BarMeta(mIdx, null));
+        if (hasSgNow) {
+          final pts     = session.points;
+          final sgSpots = <FlSpot>[];
+          for (int i = 0; i < pts.length && i < session.sgPoints.length; i++) {
+            final sg = session.sgPoints[i];
+            if (sg != null) sgSpots.add(FlSpot(pts[i].x, sg));
+          }
+          if (sgSpots.isNotEmpty) {
+            bars.add(LineChartBarData(
+              spots:           sgSpots,
+              isCurved:        true,
+              curveSmoothness: 0.3,
+              color:           color,
+              barWidth:        2,
+              dotData:         const FlDotData(show: false),
+              belowBarData:    BarAreaData(show: true, color: color.withOpacity(0.05)),
+            ));
+            barMetas.add(_BarMeta(mIdx, null));
+          }
+        }
         globalColorIdx++;
       }
     }
