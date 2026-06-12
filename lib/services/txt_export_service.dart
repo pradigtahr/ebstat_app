@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../models/measurement_point.dart';
 import '../models/project_session.dart';
 
 /// Exports all measurements in a PalmSens-compatible TXT format (firmware-style
@@ -28,23 +29,27 @@ class TxtExportService {
       buf.writeln('Date');
       buf.writeln(isCa ? 'time_s,µA' : 'V,µA');
 
-      // Section 3 – data rows (convert mV→V, nA→µA)
+      // Section 3 – data rows (convert mV→V or ms→s, nA→µA)
       final isCv = session.mode == 'CV';
       if (isCv) {
+        int sgOffset = 0;
         final cycles = session.cycles.toList()..sort();
         for (final cNum in cycles) {
+          final cyclePts = session.points.where((p) => p.cycle == cNum).toList();
           buf.writeln('Cycle $cNum');
-          for (final pt in session.points.where((p) => p.cycle == cNum)) {
-            final x = isCa ? pt.x / 1000 : pt.x / 1000; // ms→s or mV→V
-            final y = pt.y / 1000; // nA→µA
-            buf.writeln('${x.toStringAsFixed(6)},${y.toStringAsFixed(6)}');
+          final ys = _buildYs(cyclePts, session, sgOffset);
+          for (int j = 0; j < cyclePts.length; j++) {
+            final x = cyclePts[j].x / 1000;
+            buf.writeln('${x.toStringAsFixed(6)},${ys[j].toStringAsFixed(6)}');
           }
+          sgOffset += cyclePts.length;
         }
       } else {
-        for (final pt in session.points) {
-          final x = isCa ? pt.x / 1000 : pt.x / 1000;
-          final y = pt.y / 1000;
-          buf.writeln('${x.toStringAsFixed(6)},${y.toStringAsFixed(6)}');
+        final pts = session.points;
+        final ys  = _buildYs(pts, session, 0);
+        for (int j = 0; j < pts.length; j++) {
+          final x = pts[j].x / 1000;
+          buf.writeln('${x.toStringAsFixed(6)},${ys[j].toStringAsFixed(6)}');
         }
       }
     }
@@ -64,5 +69,17 @@ class TxtExportService {
         subject: 'EbStat — ${project.modeName} measurement data',
       ),
     );
+  }
+
+  static List<double> _buildYs(
+      List<MeasurementPoint> pts, MeasurementSession session, int sgOffset) {
+    if (!session.sgEnabled || !session.hasSgData) {
+      return pts.map((p) => p.y / 1000).toList();
+    }
+    return List.generate(pts.length, (i) {
+      final sgIdx = sgOffset + i;
+      final sg    = sgIdx < session.sgPoints.length ? session.sgPoints[sgIdx] : null;
+      return (sg ?? pts[i].y) / 1000;
+    });
   }
 }
