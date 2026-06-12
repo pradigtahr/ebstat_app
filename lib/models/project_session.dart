@@ -8,6 +8,7 @@ class MeasurementSession {
   final DateTime startedAt;
   final List<MeasurementPoint> points;
   final List<double?> sgPoints;
+  final bool sgEnabled;
 
   MeasurementSession({
     required this.mode,
@@ -15,6 +16,7 @@ class MeasurementSession {
     required this.displayName,
     required this.parameters,
     required this.startedAt,
+    this.sgEnabled = false,
     List<MeasurementPoint>? points,
   })  : points   = points ?? [],
         sgPoints = [];

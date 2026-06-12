@@ -125,6 +125,7 @@ class MeasurementProvider extends ChangeNotifier {
       displayName: displayName,
       parameters:  Map.from(_parameters),
       startedAt:   DateTime.now(),
+      sgEnabled:   _sgEnabled && _sgFilterWindow > 0,
     );
     _nextLabel        = '';
     _state            = MeasurementState.running;
