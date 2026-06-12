@@ -197,9 +197,12 @@ class MeasurementProvider extends ChangeNotifier {
     final cmd = EbstatProtocol.buildMeasurementCmd(mode, paramMap);
 
     bool headerSeen = false;
-    final xy   = EbstatProtocol.xyColumns(mode);
-    final xIdx = xy[0];
-    final yIdx = xy[1];
+    // Column positions are resolved from the received CSV header by name
+    // (firmware column order can change between versions); these fixed
+    // positions are only the fallback until the header arrives.
+    final xy = EbstatProtocol.xyColumns(mode);
+    int xIdx = xy[0];
+    int yIdx = xy[1];
     final isCv = mode == 'CV';
 
     _dataSub = BleService().rawLines.listen((line) {
@@ -220,7 +223,12 @@ class MeasurementProvider extends ChangeNotifier {
         }
         if (trimmed.startsWith('# ERR') || trimmed.startsWith('# WARN')) {
           debugPrint('[BLE] $trimmed');
-          _onWarning?.call(trimmed.replaceFirst(RegExp(r'^#\s*'), ''));
+          // A pre-header # ERR means the firmware rejected the command;
+          // BleService fails the pending future and _onBleRunError shows the
+          // message — don't double-report it here.
+          if (headerSeen || !trimmed.startsWith('# ERR')) {
+            _onWarning?.call(trimmed.replaceFirst(RegExp(r'^#\s*'), ''));
+          }
           return;
         }
 
@@ -241,7 +249,14 @@ class MeasurementProvider extends ChangeNotifier {
           _parseSgLine(trimmed);
           return;
         }
-        if (!headerSeen) { headerSeen = true; return; }
+        if (!headerSeen) {
+          headerSeen = true;
+          final resolved = EbstatProtocol.xyColumnsFromHeader(
+              mode, EbstatProtocol.parseCsvLine(line));
+          xIdx = resolved[0];
+          yIdx = resolved[1];
+          return;
+        }
         _lastBleRow = line;
         final cols = line.split(',');
         if (cols.length > yIdx) {
@@ -358,6 +373,17 @@ class MeasurementProvider extends ChangeNotifier {
     _progress    = null;
     _sgTimer?.cancel();
     _sgTimer = null;
+    // Firmware rejected the command (# ERR before any data): no run happened.
+    // Return to the parameters screen with the firmware's message.
+    if (error is FwCommandRejectedException &&
+        (_session == null || _session!.points.isEmpty)) {
+      _runCompleted = true;
+      _state        = MeasurementState.idle;
+      _onWarning?.call(error.message);
+      notifyListeners();
+      _popToParameters?.call();
+      return;
+    }
     if (_session != null && _session!.points.isNotEmpty) {
       _project?.addMeasurement(_session!);
     }

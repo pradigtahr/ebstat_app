@@ -243,6 +243,23 @@ class BleService {
       return;
     }
 
+    // ── Rejected command ──────────────────────────────────────────────────
+    // Firmware emits exactly one "# ERR: ..." line and no header/data/DONE
+    // when a measurement command fails parameter validation. Fail the pending
+    // future so the caller doesn't hang and the queue can drain.
+    if (!cmd.isInfoCmd && !cmd.headerSeen && line.startsWith('# ERR')) {
+      cmd.idleTimer?.cancel();
+      _queue.removeFirst();
+      _inFlight = false;
+      if (!cmd.completer.isCompleted) {
+        final msg = line.replaceFirst(RegExp(r'^#\s*ERR:?\s*'), '');
+        cmd.completer.completeError(FwCommandRejectedException(
+            msg.isNotEmpty ? msg : 'Command rejected by device'));
+      }
+      _drainQueue();
+      return;
+    }
+
     // ── Metadata / comment lines ──────────────────────────────────────────
     if (EbstatProtocol.isMetadata(line)) {
       cmd.rawComments.add(line.substring(1).trim()); // stripped of leading "# "
@@ -402,4 +419,12 @@ class BleDisconnectedException implements Exception {
   const BleDisconnectedException(this.message);
   @override
   String toString() => 'BleDisconnectedException: $message';
+}
+
+// ── Typed exception for a command the firmware rejected with "# ERR: …" ──────
+class FwCommandRejectedException implements Exception {
+  final String message;
+  const FwCommandRejectedException(this.message);
+  @override
+  String toString() => message;
 }

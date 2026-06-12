@@ -157,33 +157,55 @@ class EbstatProtocol {
   ///                vout_mV(4) vintz_mV(5) current_nA(6)
   ///                → x = time_ms[0],      y = current_nA[6]
   ///
-  /// DPV (13 cols): step(0) t_pulse_ms(1) t_pre_ms(2) e_step_mV(3)
-  ///                e_pulse_mV(4) e_pre_mV(5) vref_pulse_mV(6) vref_pre_mV(7)
-  ///                vout_pulse_mV(8) vout_pre_mV(9) I_pulse_nA(10)
-  ///                I_pre_nA(11) delta_I_nA(12)
-  ///                → x = e_pulse_mV[4],   y = delta_I_nA[12]
-  ///                  (DAC is at e_pulse = e_step + dE_pulse during I_pulse sampling)
+  /// DPV (13 cols): step(0) t_pre_ms(1) t_pulse_ms(2) e_step_mV(3)
+  ///                e_pre_mV(4) e_pulse_mV(5) vref_pre_mV(6) vref_pulse_mV(7)
+  ///                vout_pre_mV(8) vout_pulse_mV(9) I_pre_nA(10)
+  ///                I_pulse_nA(11) delta_I_nA(12)
+  ///                → x = e_step_mV[3],   y = delta_I_nA[12]
   ///
   /// SWV (13 cols): step(0) t_fwd_ms(1) t_rev_ms(2) e_step_mV(3)
   ///                e_fwd_mV(4) e_rev_mV(5) vref_fwd_mV(6) vref_rev_mV(7)
   ///                vout_fwd_mV(8) vout_rev_mV(9) I_fwd_nA(10)
   ///                I_rev_nA(11) delta_I_nA(12)
-  ///                → x = e_fwd_mV[4],    y = delta_I_nA[12]
-  ///                  (DAC is at e_fwd = e_step + dE_pulse/2 during I_fwd sampling)
+  ///                → x = e_step_mV[3],   y = delta_I_nA[12]
+  ///                  (dE_pulse is the amplitude E_amp, applied ± about each step)
   ///
   /// NPV (7 cols):  pulse(0) t_ms(1) vref_mV(2) e_bias_mV(3)
   ///                vout_mV(4) vintz_mV(5) current_nA(6)
   ///                → x = e_bias_mV[3],   y = current_nA[6]
-  ///                  (e_bias_mV = e_top = e_pulse + dE_pulse, actual applied potential)
+  ///                  (pulse height grows by dE_step each interval; no fixed amplitude)
   static List<int> xyColumns(String technique) =>
       switch (technique.toUpperCase()) {
         'CV'  => [4, 8],
         'CA'  => [0, 6],
-        'DPV' => [4, 12],
-        'SWV' => [4, 12],
+        'DPV' => [3, 12],
+        'SWV' => [3, 12],
         'NPV' => [3, 6],
         _     => [0, 1],
       };
+
+  /// Primary-plot [xName, yName] per technique, resolved against the CSV
+  /// header the firmware actually sent (column positions may shift between
+  /// firmware versions; names are stable).
+  static const Map<String, List<String>> xyColumnNames = {
+    'CV':  ['e_actual_mV', 'current_nA'],
+    'CA':  ['time_ms',     'current_nA'],
+    'DPV': ['e_step_mV',   'delta_I_nA'],
+    'SWV': ['e_step_mV',   'delta_I_nA'],
+    'NPV': ['e_bias_mV',   'current_nA'],
+  };
+
+  /// [xColIndex, yColIndex] resolved by header name, falling back to the
+  /// fixed positions in [xyColumns] when the names are not found.
+  static List<int> xyColumnsFromHeader(String technique, List<String> header) {
+    final names = xyColumnNames[technique.toUpperCase()];
+    if (names != null && header.isNotEmpty) {
+      final xi = header.indexOf(names[0]);
+      final yi = header.indexOf(names[1]);
+      if (xi >= 0 && yi >= 0) return [xi, yi];
+    }
+    return xyColumns(technique);
+  }
 
   // ── LMP91000 configuration tables ────────────────────────────────────────
   // Mirrors the code→label tables in main.c (gain_name(), etc.)
@@ -231,7 +253,7 @@ class EbstatProtocol {
     FwCmd.cv:  [-200, 500,  5,    50,  1],     // V_start, V_vertex, step_mV, rate, n_cycles
     FwCmd.npv: [-300, 600,  5,    0,   20,  50],   // E_start, E_end, dE_step, dE_pulse(0=ignored by fw), t_pulse_ms, scan_rate_mV_s
     FwCmd.dpv: [-300, 600,  5,    200, 20,  50],
-    FwCmd.swv: [-200, 600,  10,   50,  25],        // E_start, E_end, dE_step, dE_pulse, freq_hz
+    FwCmd.swv: [-200, 600,  10,   25,  25],        // E_start, E_end, dE_step, dE_pulse(=E_amp, applied ±), freq_hz
   };
 
   static const Map<String, List<String>> techniqueParamNames = {

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../ble/pulse_limits.dart';
 import '../constants/lmp_constants.dart';
 import '../models/voltammetry_mode.dart';
 import '../providers/measurement_provider.dart';
@@ -39,7 +40,8 @@ class _ParametersScreenState extends State<ParametersScreen> {
   void initState() {
     super.initState();
     for (final p in modeParameters[widget.mode]!) {
-      _controllers[p.key] = TextEditingController();
+      _controllers[p.key] = TextEditingController()
+        ..addListener(_onFieldChanged);
     }
     final mp = context.read<MeasurementProvider>();
     _sgOn     = mp.sgEnabled;
@@ -51,6 +53,134 @@ class _ParametersScreenState extends State<ParametersScreen> {
           orElse: () => kRtiaRanges[4], // 35 kΩ
         )
         .rtiaKOhm;
+  }
+
+  // Recompute t_int-derived limits and helper texts on every keystroke.
+  void _onFieldChanged() {
+    if (mounted) setState(() {});
+  }
+
+  // ── Dynamic PalmSens limits (mirror firmware guards; see PulseLimits) ─────
+
+  int? _fieldInt(String key) {
+    final t = _controllers[key]?.text.trim() ?? '';
+    if (t.isEmpty) return null;
+    return double.tryParse(t)?.round();
+  }
+
+  /// Allowed t_pulse range for DPV/NPV from the current dE_step & scan_rate
+  /// entries; null while those fields are empty/unparseable.
+  ({int min, int max})? get _tPulseRange {
+    final step = _fieldInt('dE_step_mV');
+    final rate = _fieldInt('scan_rate_mV_s');
+    if (step == null || rate == null) return null;
+    return widget.mode == VoltammetryMode.npv
+        ? PulseLimits.npvTPulseRange(step, rate)
+        : PulseLimits.dpvTPulseRange(step, rate);
+  }
+
+  String? _helperFor(String key) {
+    final isDpvNpv = widget.mode == VoltammetryMode.dpv ||
+        widget.mode == VoltammetryMode.npv;
+    if (key == 't_pulse_ms' && isDpvNpv) {
+      final step = _fieldInt('dE_step_mV');
+      final rate = _fieldInt('scan_rate_mV_s');
+      final tInt = (step != null && rate != null)
+          ? PulseLimits.tIntDpvNpv(step, rate)
+          : null;
+      if (tInt == null) {
+        return 'Enter Step Size and scan rate to see the allowed range';
+      }
+      final r = _tPulseRange!;
+      if (r.max < r.min) {
+        return 't_int = $tInt ms — too short for a pulse; '
+            'increase Step Size or lower scan rate';
+      }
+      return widget.mode == VoltammetryMode.npv
+          ? 't_int = $tInt ms · allowed ${r.min}–${r.max} ms (½ × interval)'
+          : 't_int = $tInt ms · allowed ${r.min}–${r.max} ms';
+    }
+    if (key == 'freq_hz' && widget.mode == VoltammetryMode.swv) {
+      final freq = _fieldInt('freq_hz');
+      final maxF = PulseLimits.swvFreqMax();
+      final tInt = freq != null ? PulseLimits.tIntSwv(freq) : null;
+      if (tInt == null || freq! > maxF) {
+        return 'Allowed: 1–$maxF Hz '
+            '(each half-cycle ≥ ${PulseLimits.minPhaseMs} ms)';
+      }
+      final step = _fieldInt('dE_step_mV');
+      final eff  = (step != null && step >= 1 && tInt > 0)
+          ? ' · eff. scan rate ${step * 1000 ~/ tInt} mV/s'
+          : '';
+      return 't_int = $tInt ms · each half ${tInt ~/ 2} ms$eff';
+    }
+    return null;
+  }
+
+  String? Function(double)? _extraValidatorFor(String key) {
+    final isDpvNpv = widget.mode == VoltammetryMode.dpv ||
+        widget.mode == VoltammetryMode.npv;
+    if (key == 't_pulse_ms' && isDpvNpv) {
+      return (v) {
+        final r = _tPulseRange;
+        if (r == null) return null;
+        if (r.max < r.min) {
+          return 'No valid t pulse for this Step Size / scan rate';
+        }
+        if (v < r.min || v > r.max) return 'Allowed: ${r.min}–${r.max} ms';
+        return null;
+      };
+    }
+    if (key == 'freq_hz' && widget.mode == VoltammetryMode.swv) {
+      return (v) {
+        final maxF = PulseLimits.swvFreqMax();
+        if (v < 1 || v > maxF) return 'Allowed: 1–$maxF Hz';
+        return null;
+      };
+    }
+    return null;
+  }
+
+  /// First violated cross-field/timing constraint, or null when none is
+  /// computable/violated. Disables the Start button while non-null.
+  String? get _constraintError {
+    final eStart = _fieldInt('E_start_mV');
+    final eEnd   = _fieldInt('E_end_mV');
+    final mode   = widget.mode;
+
+    if (mode == VoltammetryMode.dpv || mode == VoltammetryMode.swv) {
+      if (eStart != null && eEnd != null && eEnd <= eStart) {
+        return 'End Potential must be greater than Start Potential';
+      }
+    }
+    if (mode == VoltammetryMode.npv) {
+      final step = _fieldInt('dE_step_mV');
+      if (eStart != null && eEnd != null && step != null &&
+          eEnd < eStart + step) {
+        return 'End Potential must be at least Start + Step Size '
+            '(one pulse)';
+      }
+    }
+    if (mode == VoltammetryMode.dpv || mode == VoltammetryMode.npv) {
+      final r = _tPulseRange;
+      if (r != null) {
+        if (r.max < r.min) {
+          return 'Interval too short for a pulse — increase Step Size '
+              'or lower scan rate';
+        }
+        final tp = _fieldInt('t_pulse_ms');
+        if (tp != null && (tp < r.min || tp > r.max)) {
+          return 't pulse must be ${r.min}–${r.max} ms';
+        }
+      }
+    }
+    if (mode == VoltammetryMode.swv) {
+      final f = _fieldInt('freq_hz');
+      if (f != null && (f < 1 || f > PulseLimits.swvFreqMax())) {
+        return 'Frequency must be 1–${PulseLimits.swvFreqMax()} Hz';
+      }
+    }
+    return null;
   }
 
   void _applyToProvider() {
@@ -202,6 +332,7 @@ class _ParametersScreenState extends State<ParametersScreen> {
       ),
       body: Form(
         key: _formKey,
+        autovalidateMode: AutovalidateMode.onUserInteraction,
         child: Column(
           children: [
             Expanded(
@@ -214,15 +345,20 @@ class _ParametersScreenState extends State<ParametersScreen> {
                   const SizedBox(height: 16),
                   for (int i = 0; i < params.length; i++) ...[
                     _ParameterField(
-                      parameter:  params[i],
-                      controller: _controllers[params[i].key]!,
+                      parameter:      params[i],
+                      controller:     _controllers[params[i].key]!,
+                      helperOverride: _helperFor(params[i].key),
+                      extraValidator: _extraValidatorFor(params[i].key),
                     ),
                     if (i < params.length - 1) const SizedBox(height: 16),
                   ],
                 ],
               ),
             ),
-            _StartButton(onPressed: _onStart),
+            _StartButton(
+              onPressed: _constraintError == null ? _onStart : null,
+              errorText: _constraintError,
+            ),
           ],
         ),
       ),
@@ -498,10 +634,21 @@ class _PresetsSheetState extends State<_PresetsSheet> {
 
 // ── Parameter field ───────────────────────────────────────────────────────────
 class _ParameterField extends StatelessWidget {
-  const _ParameterField(
-      {required this.parameter, required this.controller});
+  const _ParameterField({
+    required this.parameter,
+    required this.controller,
+    this.helperOverride,
+    this.extraValidator,
+  });
   final VoltammetryParameter parameter;
   final TextEditingController controller;
+
+  /// Dynamic helper text (e.g. computed t_int and allowed range); when null
+  /// the static min/max range text is shown.
+  final String? helperOverride;
+
+  /// Dynamic constraint check run after the static min/max validation.
+  final String? Function(double value)? extraValidator;
 
   @override
   Widget build(BuildContext context) {
@@ -516,7 +663,8 @@ class _ParameterField extends StatelessWidget {
         hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
         suffixText: parameter.unit,
         suffixStyle: const TextStyle(color: AppColors.accent2),
-        helperText: _rangeText,
+        helperText: helperOverride ?? _rangeText,
+        helperMaxLines: 2,
         helperStyle:
             const TextStyle(color: AppColors.textSecondary, fontSize: 11),
       ),
@@ -528,7 +676,7 @@ class _ParameterField extends StatelessWidget {
           return 'Min: ${parameter.min!.toStringAsFixed(0)}';
         if (parameter.max != null && num > parameter.max!)
           return 'Max: ${parameter.max!.toStringAsFixed(0)}';
-        return null;
+        return extraValidator?.call(num);
       },
     );
   }
@@ -548,8 +696,9 @@ class _ParameterField extends StatelessWidget {
 
 // ── Start button ──────────────────────────────────────────────────────────────
 class _StartButton extends StatelessWidget {
-  const _StartButton({required this.onPressed});
-  final VoidCallback onPressed;
+  const _StartButton({required this.onPressed, this.errorText});
+  final VoidCallback? onPressed;
+  final String? errorText;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -559,10 +708,26 @@ class _StartButton extends StatelessWidget {
           color: AppColors.primary,
           border: Border(top: BorderSide(color: AppColors.divider)),
         ),
-        child: ElevatedButton.icon(
-          onPressed: onPressed,
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Start Measurement'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (errorText != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  errorText!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Colors.redAccent, fontSize: 12),
+                ),
+              ),
+            ElevatedButton.icon(
+              onPressed: onPressed,
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('Start Measurement'),
+            ),
+          ],
         ),
       );
 }

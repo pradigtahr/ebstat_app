@@ -97,12 +97,12 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
       hint: '10', defaultValue: 10, min: 1, max: 50,
     ),
     const VoltammetryParameter(
-      key: 'dE_pulse_mV', label: 'Pulse Amplitude', unit: 'mV',
-      hint: '50', defaultValue: 50, min: 1, max: 200,
+      key: 'dE_pulse_mV', label: 'Amplitude (± about step)', unit: 'mV',
+      hint: '25', defaultValue: 25, min: 1, max: 200,
     ),
     const VoltammetryParameter(
       key: 'freq_hz', label: 'Frequency', unit: 'Hz',
-      hint: '25', defaultValue: 25, min: 1, max: 1000,
+      hint: '25', defaultValue: 25, min: 1, max: 50,
     ),
   ],
   VoltammetryMode.dpv: [
