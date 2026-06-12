@@ -229,7 +229,7 @@ class EbstatProtocol {
   static const Map<String, List<dynamic>> techniqueDefaults = {
     FwCmd.ca:  [0,    200,  2000, 100, 50],   // E_quiet, E_step, quiet_ms, step_ms, samples_per_stage
     FwCmd.cv:  [-200, 500,  5,    50,  1],     // V_start, V_vertex, step_mV, rate, n_cycles
-    FwCmd.npv: [-200, 600,  10,   50,  20,  50],   // E_start, E_end, dE_step, dE_pulse, t_pulse_ms, scan_rate_mV_s
+    FwCmd.npv: [-300, 600,  5,    0,   20,  50],   // E_start, E_end, dE_step, dE_pulse(0=ignored by fw), t_pulse_ms, scan_rate_mV_s
     FwCmd.dpv: [-300, 600,  5,    200, 20,  50],
     FwCmd.swv: [-200, 600,  10,   50,  25],        // E_start, E_end, dE_step, dE_pulse, freq_hz
   };

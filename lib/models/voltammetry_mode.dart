@@ -134,19 +134,15 @@ final Map<VoltammetryMode, List<VoltammetryParameter>> modeParameters = {
   VoltammetryMode.npv: [
     const VoltammetryParameter(
       key: 'E_start_mV', label: 'Start Potential', unit: 'mV',
-      hint: '-200', defaultValue: -200, min: -1500, max: 1500,
+      hint: '-300', defaultValue: -300, min: -1500, max: 1500,
     ),
     const VoltammetryParameter(
       key: 'E_end_mV', label: 'End Potential', unit: 'mV',
       hint: '600', defaultValue: 600, min: -1500, max: 1500,
     ),
     const VoltammetryParameter(
-      key: 'dE_step_mV', label: 'Step Size', unit: 'mV',
-      hint: '10', defaultValue: 10, min: 1, max: 50,
-    ),
-    const VoltammetryParameter(
-      key: 'dE_pulse_mV', label: 'Pulse Amplitude', unit: 'mV',
-      hint: '50', defaultValue: 50, min: 1, max: 200,
+      key: 'dE_step_mV', label: 'Step Size (pulse amplitude increment)', unit: 'mV',
+      hint: '5', defaultValue: 5, min: 1, max: 50,
     ),
     const VoltammetryParameter(
       key: 't_pulse_ms', label: 't pulse', unit: 'ms',
