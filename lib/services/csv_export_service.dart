@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../models/measurement_point.dart';
 import '../models/project_session.dart';
 
 /// Exports measurements as a PalmSens PSTrace-compatible CSV.
@@ -39,21 +40,23 @@ class CsvExportService {
       final session = project.measurements[mIdx];
 
       if (isCv) {
+        int sgOffset = 0;
         final cycles = session.cycles.toList()..sort();
         for (final cNum in cycles) {
-          if (hiddenCy.contains('$mIdx:$cNum')) continue;
-          final pts = session.points.where((p) => p.cycle == cNum).toList();
-          if (pts.isEmpty) continue;
-          final name = cycles.length == 1
-              ? 'Cyclic Voltammetry [$sn]: ${session.displayName}'
-              : 'Cyclic Voltammetry [$sn]: ${session.displayName} — Cycle $cNum';
-          series.add(_Series(
-            name:      name,
-            timestamp: session.startedAt,
-            xs:        pts.map((p) => p.x / 1000).toList(),
-            ys:        pts.map((p) => p.y / 1000).toList(),
-          ));
-          sn++;
+          final cyclePts = session.points.where((p) => p.cycle == cNum).toList();
+          if (!hiddenCy.contains('$mIdx:$cNum') && cyclePts.isNotEmpty) {
+            final name = cycles.length == 1
+                ? 'Cyclic Voltammetry [$sn]: ${session.displayName}'
+                : 'Cyclic Voltammetry [$sn]: ${session.displayName} — Cycle $cNum';
+            series.add(_Series(
+              name:      name,
+              timestamp: session.startedAt,
+              xs:        cyclePts.map((p) => p.x / 1000).toList(),
+              ys:        _buildYs(cyclePts, session, sgOffset),
+            ));
+            sn++;
+          }
+          sgOffset += cyclePts.length;
         }
       } else {
         if (session.points.isEmpty) continue;
@@ -65,7 +68,7 @@ class CsvExportService {
           name:      '${project.modeName} [$sn]: ${session.displayName}',
           timestamp: session.startedAt,
           xs:        pts.map((p) => p.x / 1000).toList(),
-          ys:        pts.map((p) => p.y / 1000).toList(),
+          ys:        _buildYs(pts, session, 0),
         ));
         sn++;
       }
@@ -119,6 +122,18 @@ class CsvExportService {
       files:   [XFile(file.path, mimeType: 'text/csv')],
       subject: 'EbStat — ${project.modeName} measurement data',
     ));
+  }
+
+  static List<double> _buildYs(
+      List<MeasurementPoint> pts, MeasurementSession session, int sgOffset) {
+    if (!session.sgEnabled || !session.hasSgData) {
+      return pts.map((p) => p.y / 1000).toList();
+    }
+    return List.generate(pts.length, (i) {
+      final sgIdx = sgOffset + i;
+      final sg    = sgIdx < session.sgPoints.length ? session.sgPoints[sgIdx] : null;
+      return (sg ?? pts[i].y) / 1000;
+    });
   }
 
   static Uint8List _utf16Le(String s) {

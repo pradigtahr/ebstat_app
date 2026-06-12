@@ -69,7 +69,8 @@ class MeasurementProvider extends ChangeNotifier {
 
   Future<void> _loadSgEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    _sgEnabled = prefs.getBool('sg_enabled') ?? false;
+    _sgEnabled      = prefs.getBool('sg_enabled')      ?? false;
+    _sgFilterWindow = prefs.getInt('sg_filter_window') ?? -1;
     notifyListeners();
   }
 
@@ -80,10 +81,11 @@ class MeasurementProvider extends ChangeNotifier {
     await prefs.setBool('sg_enabled', value);
   }
 
-  void setSgFilterWindow(int window) {
+  Future<void> setSgFilterWindow(int window) async {
     _sgFilterWindow = window;
     notifyListeners();
-    // TODO: implement SG filtering using _sgFilterWindow
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('sg_filter_window', window);
   }
 
   void setSelectedGainCode(int code) {
