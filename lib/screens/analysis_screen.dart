@@ -44,19 +44,20 @@ class AnalysisScreen extends StatefulWidget {
 class _AnalysisScreenState extends State<AnalysisScreen> {
   final Set<int>    _hiddenMeasurements = {};
   final Set<String> _hiddenCycles       = {};
-  bool _showSg = true;
+  bool _showSg       = true;
+  bool _panelVisible = true;
 
   // ── Peak / level state ────────────────────────────────────────────────────
   final List<PeakResult>  _peaks  = [];
   final List<LevelResult> _levels = [];
 
   // Persisted popup defaults
-  double   _lastMinWidthMv        = 20.0;
-  double   _lastMinHeightUa       = 0.1;
-  double   _lastBaselineRegionPct = 15.0;
-  PeakType _lastPeakType          = PeakType.both;
-  double   _lastMinDurationS      = 1.0;
-  double   _lastMinLevelUa        = 0.1;
+  double   _lastMinWidthMv       = 20.0;
+  double   _lastMinHeightUa      = 0.1;
+  double   _lastFootThresholdPct = 10.0;
+  PeakType _lastPeakType         = PeakType.both;
+  double   _lastMinDurationS     = 1.0;
+  double   _lastMinLevelUa       = 0.1;
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   String _cycleKey(int m, int c) => '$m:$c';
@@ -73,10 +74,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
   // ── Peak / level runners ──────────────────────────────────────────────────
 
   Future<void> _showPeakDialog(ProjectSession project) async {
-    final minW   = TextEditingController(text: _lastMinWidthMv.toStringAsFixed(0));
-    final minH   = TextEditingController(text: _lastMinHeightUa.toString());
-    final basePct= TextEditingController(text: _lastBaselineRegionPct.toStringAsFixed(0));
-    var   pType  = _lastPeakType;
+    final minW    = TextEditingController(text: _lastMinWidthMv.toStringAsFixed(0));
+    final minH    = TextEditingController(text: _lastMinHeightUa.toString());
+    final footPct = TextEditingController(text: _lastFootThresholdPct.toStringAsFixed(0));
+    var   pType   = _lastPeakType;
 
     final run = await showDialog<bool>(
       context: context,
@@ -89,7 +90,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           const SizedBox(height: 12),
           _dlgField('Min peak height', 'µA', minH),
           const SizedBox(height: 12),
-          _dlgField('Baseline region (each side)', '%', basePct),
+          _dlgField('Foot detection threshold', '%', footPct,
+              helper: '% of peak height; lower = baseline closer to peak'),
           const SizedBox(height: 12),
           DropdownButtonFormField<PeakType>(
             value: pType,
@@ -113,10 +115,10 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     if (run != true || !mounted) return;
 
     setState(() {
-      _lastMinWidthMv        = double.tryParse(minW.text)    ?? _lastMinWidthMv;
-      _lastMinHeightUa       = double.tryParse(minH.text)    ?? _lastMinHeightUa;
-      _lastBaselineRegionPct = double.tryParse(basePct.text) ?? _lastBaselineRegionPct;
-      _lastPeakType          = pType;
+      _lastMinWidthMv       = double.tryParse(minW.text)    ?? _lastMinWidthMv;
+      _lastMinHeightUa      = double.tryParse(minH.text)    ?? _lastMinHeightUa;
+      _lastFootThresholdPct = double.tryParse(footPct.text) ?? _lastFootThresholdPct;
+      _lastPeakType         = pType;
       _peaks.clear();
       _runDetectPeaks(project);
     });
@@ -140,12 +142,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
             final inp = List.generate(cyclePts.length,
                 (i) => (eMv: cyclePts[i].x, iUa: ys[i]));
             final res = detectPeaks(
-              cycleId:           '$mIdx:$cNum',
-              pts:               inp,
-              minWidthMv:        _lastMinWidthMv,
-              minHeightUa:       _lastMinHeightUa,
-              baselineRegionPct: _lastBaselineRegionPct,
-              peakType:          _lastPeakType,
+              cycleId:          '$mIdx:$cNum',
+              pts:              inp,
+              minWidthMv:       _lastMinWidthMv,
+              minHeightUa:      _lastMinHeightUa,
+              footThresholdPct: _lastFootThresholdPct,
+              peakType:         _lastPeakType,
             );
             if (res != null) _peaks.add(res);
           }
@@ -157,12 +159,12 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
           final ys  = _buildYsUa(pts, session, 0);
           final inp = List.generate(pts.length, (i) => (eMv: pts[i].x, iUa: ys[i]));
           final res = detectPeaks(
-            cycleId:           '$mIdx',
-            pts:               inp,
-            minWidthMv:        _lastMinWidthMv,
-            minHeightUa:       _lastMinHeightUa,
-            baselineRegionPct: _lastBaselineRegionPct,
-            peakType:          _lastPeakType,
+            cycleId:          '$mIdx',
+            pts:              inp,
+            minWidthMv:       _lastMinWidthMv,
+            minHeightUa:      _lastMinHeightUa,
+            footThresholdPct: _lastFootThresholdPct,
+            peakType:         _lastPeakType,
           );
           if (res != null) _peaks.add(res);
         }
@@ -235,12 +237,18 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
 
   // ── Dialog widget helpers ─────────────────────────────────────────────────
 
-  static Widget _dlgField(String label, String unit, TextEditingController ctrl) =>
+  static Widget _dlgField(String label, String unit, TextEditingController ctrl,
+          {String? helper}) =>
       TextField(
         controller: ctrl,
         keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
         style: const TextStyle(color: Colors.white),
-        decoration: _dlgInputDeco(label).copyWith(suffixText: unit),
+        decoration: _dlgInputDeco(label).copyWith(
+          suffixText: unit,
+          helperText: helper,
+          helperMaxLines: 2,
+          helperStyle: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+        ),
       );
 
   static InputDecoration _dlgInputDeco(String label) => InputDecoration(
@@ -358,14 +366,22 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                     Colors.redAccent),
               ),
             ],
+            // ── Bottom panel hide/show toggle ────────────────────────────
+            IconButton(
+              tooltip: _panelVisible ? 'Hide list' : 'Show list',
+              onPressed: () => setState(() => _panelVisible = !_panelVisible),
+              icon: Icon(
+                _panelVisible ? Icons.expand_more : Icons.expand_less,
+                color: Colors.white,
+              ),
+            ),
           ],
         ],
       ),
       body: project == null || project.measurements.isEmpty
           ? _empty()
-          : Column(children: [
+          : LayoutBuilder(builder: (ctx, cons) => Column(children: [
               Expanded(
-                flex: 6,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(8, 10, 12, 4),
                   child: RepaintBoundary(
@@ -384,21 +400,30 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   ),
                 ),
               ),
-              Expanded(
-                flex: 3,
-                child: RepaintBoundary(
-                  child: _MeasurementTree(
-                    project:            project,
-                    provider:           provider,
-                    isCv:               mode == VoltammetryMode.cv,
-                    hiddenMeasurements: _hiddenMeasurements,
-                    hiddenCycles:       _hiddenCycles,
-                    onToggleMeas:       _toggleMeas,
-                    onToggleCycle:      _toggleCycle,
-                    onDeleteMeas:  (i)    => _confirmDeleteMeas(i, provider),
-                    onDeleteCycle: (m, c) => _confirmDeleteCycle(m, c, provider),
-                  ),
-                ),
+              // Bottom panel: slides away when hidden so the chart fills the screen.
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                transitionBuilder: (child, anim) => SizeTransition(
+                    sizeFactor: anim, axisAlignment: -1.0, child: child),
+                child: _panelVisible
+                    ? SizedBox(
+                        key:    const ValueKey('panel'),
+                        height: cons.maxHeight / 3,
+                        child: RepaintBoundary(
+                          child: _MeasurementTree(
+                            project:            project,
+                            provider:           provider,
+                            isCv:               mode == VoltammetryMode.cv,
+                            hiddenMeasurements: _hiddenMeasurements,
+                            hiddenCycles:       _hiddenCycles,
+                            onToggleMeas:       _toggleMeas,
+                            onToggleCycle:      _toggleCycle,
+                            onDeleteMeas:  (i)    => _confirmDeleteMeas(i, provider),
+                            onDeleteCycle: (m, c) => _confirmDeleteCycle(m, c, provider),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(key: ValueKey('panel-hidden')),
               ),
               if (!widget.isImportedSession)
                 _BottomBar(
@@ -408,7 +433,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                   hiddenMeasurements: _hiddenMeasurements,
                   hiddenCycles:       _hiddenCycles,
                 ),
-            ]),
+            ])),
     );
   }
 
@@ -987,100 +1012,23 @@ class _MeasurementTree extends StatelessWidget {
                   tooltip: 'Delete measurement',
                 ),
               ]),
-              children: [
-                _CycleDropdown(
-                  mIdx:         mIdx,
-                  cycles:       cycles,
-                  hiddenCycles: hiddenCycles,
-                  onToggle:     onToggleCycle,
-                  onDelete:     onDeleteCycle,
-                ),
-              ],
+              children: cycles.map((cNum) {
+                final key       = '$mIdx:$cNum';
+                final cycHidden = hiddenCycles.contains(key);
+                final color     = kCycleColors[(cNum - 1) % kCycleColors.length];
+                return _MeasRow(
+                  label:    'Cycle $cNum',
+                  visible:  !cycHidden,
+                  colorDot: color,
+                  indent:   true,
+                  onToggle: () => onToggleCycle(mIdx, cNum),
+                  onDelete: () => onDeleteCycle(mIdx, cNum),
+                );
+              }).toList(),
             ),
           );
         },
       ),
-    );
-  }
-}
-
-// ── Cycle dropdown widget (replaces individual cycle rows) ────────────────────
-
-class _CycleDropdown extends StatelessWidget {
-  const _CycleDropdown({
-    required this.mIdx,
-    required this.cycles,
-    required this.hiddenCycles,
-    required this.onToggle,
-    required this.onDelete,
-  });
-
-  final int           mIdx;
-  final List<int>     cycles;
-  final Set<String>   hiddenCycles;
-  final void Function(int mIdx, int cNum) onToggle;
-  final void Function(int mIdx, int cNum) onDelete;
-
-  @override
-  Widget build(BuildContext context) {
-    final visCount = cycles.where((c) => !hiddenCycles.contains('$mIdx:$c')).length;
-
-    return Padding(
-      padding: const EdgeInsets.only(left: 16, right: 8, bottom: 8),
-      child: Row(children: [
-        PopupMenuButton<int>(
-          onSelected: (cNum) => onToggle(mIdx, cNum),
-          color: AppColors.surface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          itemBuilder: (ctx) => cycles.map((cNum) {
-            final visible = !hiddenCycles.contains('$mIdx:$cNum');
-            final color   = kCycleColors[(cNum - 1) % kCycleColors.length];
-            return CheckedPopupMenuItem<int>(
-              value:   cNum,
-              checked: visible,
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: Row(children: [
-                Container(
-                  width: 8, height: 8,
-                  decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                ),
-                const SizedBox(width: 8),
-                Text('Cycle $cNum',
-                    style: const TextStyle(color: Colors.white, fontSize: 13)),
-              ]),
-            );
-          }).toList(),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              border:       Border.all(color: AppColors.divider),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(
-                'Cycles ($visCount / ${cycles.length} visible)',
-                style: const TextStyle(color: AppColors.accent2, fontSize: 12),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.arrow_drop_down, color: AppColors.accent2, size: 18),
-            ]),
-          ),
-        ),
-        const Spacer(),
-        // Per-cycle delete: open a small menu to pick which cycle to delete
-        PopupMenuButton<int>(
-          tooltip: 'Delete a cycle',
-          color:   AppColors.surface,
-          shape:   RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-          icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent),
-          onSelected: (cNum) => onDelete(mIdx, cNum),
-          itemBuilder: (ctx) => cycles.map((cNum) => PopupMenuItem<int>(
-            value: cNum,
-            child: Text('Delete Cycle $cNum',
-                style: const TextStyle(color: Colors.white, fontSize: 13)),
-          )).toList(),
-        ),
-      ]),
     );
   }
 }

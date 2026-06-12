@@ -50,12 +50,18 @@ class LevelResult {
 
 /// Run the spec algorithm on one cycle/series.
 /// [pts] E in mV, I in µA.  Returns null if no peak passes filters.
+///
+/// Baseline: foot-of-peak method. Walking out from each peak candidate, the
+/// foot is where |I − running_baseline| drops below footThresholdPct% of the
+/// peak height. Points before the left foot and after the right foot form the
+/// regions for a single shared linear regression. Falls back to the outer 15%
+/// of the E range when a foot region has fewer than 3 points.
 PeakResult? detectPeaks({
   required String cycleId,
   required List<({double eMv, double iUa})> pts,
   required double minWidthMv,
   required double minHeightUa,
-  required double baselineRegionPct,
+  required double footThresholdPct,
   required PeakType peakType,
 }) {
   if (pts.length < 10) return null;
@@ -65,56 +71,99 @@ PeakResult? detectPeaks({
   final eRange = eMax - eMin;
   if (eRange <= 0) return null;
 
-  // ── Shared baseline (linear regression through outer regions) ─────────────
-  final frac     = baselineRegionPct / 100.0;
-  final leftPts  = pts.where((p) => p.eMv <= eMin + frac * eRange).toList();
-  final rightPts = pts.where((p) => p.eMv >= eMax - frac * eRange).toList();
-  final (:slope, :intercept) = _linReg([...leftPts, ...rightPts]);
+  // Running baseline estimate: mean of the first 10% of points (min 5).
+  final headN = max(5, pts.length ~/ 10);
+  final runningBase = _mean(pts.take(headN).map((p) => p.iUa));
 
   // Local baseline estimate for width midpoint (mean of outermost 10 pts)
   final localBase = (_mean(pts.take(10).map((p) => p.iUa)) +
                      _mean(pts.skip(max(0, pts.length - 10)).map((p) => p.iUa))) /
                     2.0;
 
-  double? aE, aIRaw, aIpa, cE, cIRaw, cIpc;
-
-  // ── Anodic peak (global max) ──────────────────────────────────────────────
+  // ── Candidates (height-filtered) ──────────────────────────────────────────
+  int? aIdx, cIdx;
   if (peakType != PeakType.reductionOnly) {
     int mi = 0;
     for (int i = 1; i < pts.length; i++) {
       if (pts[i].iUa > pts[mi].iUa) mi = i;
     }
-    final cand = pts[mi];
-    if (cand.iUa >= minHeightUa) {
-      final mid = (cand.iUa + localBase) / 2.0;
-      int li = mi, ri = mi;
-      while (li > 0 && pts[li].iUa >= mid) li--;
-      while (ri < pts.length - 1 && pts[ri].iUa >= mid) ri++;
-      if (pts[ri].eMv - pts[li].eMv >= minWidthMv) {
-        aE    = cand.eMv;
-        aIRaw = cand.iUa;
-        aIpa  = cand.iUa - (slope * cand.eMv + intercept);
-      }
-    }
+    if (pts[mi].iUa >= minHeightUa) aIdx = mi;
   }
-
-  // ── Cathodic peak (global min) ────────────────────────────────────────────
   if (peakType != PeakType.oxidationOnly) {
     int mi = 0;
     for (int i = 1; i < pts.length; i++) {
       if (pts[i].iUa < pts[mi].iUa) mi = i;
     }
-    final cand = pts[mi];
-    if (cand.iUa.abs() >= minHeightUa) {
-      final mid = (cand.iUa + localBase) / 2.0;
-      int li = mi, ri = mi;
-      while (li > 0 && pts[li].iUa <= mid) li--;
-      while (ri < pts.length - 1 && pts[ri].iUa <= mid) ri++;
-      if (pts[ri].eMv - pts[li].eMv >= minWidthMv) {
-        cE    = cand.eMv;
-        cIRaw = cand.iUa;
-        cIpc  = cand.iUa - (slope * cand.eMv + intercept);
-      }
+    if (pts[mi].iUa.abs() >= minHeightUa) cIdx = mi;
+  }
+  if (aIdx == null && cIdx == null) return null;
+
+  // ── Foot-of-peak regions (shared baseline for both peaks) ─────────────────
+  // Walk out from each candidate until the current returns to within
+  // footThresholdPct% of the peak height above/below the running baseline.
+  (int, int)? footOf(int iPeak) {
+    final peakHeight = (pts[iPeak].iUa - runningBase).abs();
+    if (peakHeight <= 0) return null;
+    final thresh = footThresholdPct / 100.0 * peakHeight;
+    int l = iPeak;
+    while (l > 0 && (pts[l].iUa - runningBase).abs() >= thresh) l--;
+    int r = iPeak;
+    while (r < pts.length - 1 && (pts[r].iUa - runningBase).abs() >= thresh) r++;
+    return (l, r);
+  }
+
+  int leftFoot = pts.length, rightFoot = -1;
+  for (final idx in [aIdx, cIdx]) {
+    if (idx == null) continue;
+    final f = footOf(idx);
+    if (f == null) continue;
+    leftFoot  = min(leftFoot, f.$1);
+    rightFoot = max(rightFoot, f.$2);
+  }
+
+  List<({double eMv, double iUa})> leftPts, rightPts;
+  if (rightFoot >= 0 && leftFoot < pts.length &&
+      leftFoot + 1 >= 3 && pts.length - rightFoot >= 3) {
+    leftPts  = pts.sublist(0, leftFoot + 1);
+    rightPts = pts.sublist(rightFoot);
+  } else {
+    // Fallback: outer 15% of the E range on each side (old edge method).
+    const fallbackPct = 15.0;
+    const frac = fallbackPct / 100.0;
+    leftPts  = pts.where((p) => p.eMv <= eMin + frac * eRange).toList();
+    rightPts = pts.where((p) => p.eMv >= eMax - frac * eRange).toList();
+  }
+  final (:slope, :intercept) = _linReg([...leftPts, ...rightPts]);
+
+  double? aE, aIRaw, aIpa, cE, cIRaw, cIpc;
+
+  // ── Anodic peak ───────────────────────────────────────────────────────────
+  if (aIdx != null) {
+    final cand = pts[aIdx];
+    final mid = (cand.iUa + localBase) / 2.0;
+    int li = aIdx, ri = aIdx;
+    while (li > 0 && pts[li].iUa >= mid) li--;
+    while (ri < pts.length - 1 && pts[ri].iUa >= mid) ri++;
+    // abs(): on a CV reverse sweep E decreases with index, so a signed
+    // difference can be negative even for a wide peak.
+    if ((pts[ri].eMv - pts[li].eMv).abs() >= minWidthMv) {
+      aE    = cand.eMv;
+      aIRaw = cand.iUa;
+      aIpa  = cand.iUa - (slope * cand.eMv + intercept);
+    }
+  }
+
+  // ── Cathodic peak ─────────────────────────────────────────────────────────
+  if (cIdx != null) {
+    final cand = pts[cIdx];
+    final mid = (cand.iUa + localBase) / 2.0;
+    int li = cIdx, ri = cIdx;
+    while (li > 0 && pts[li].iUa <= mid) li--;
+    while (ri < pts.length - 1 && pts[ri].iUa <= mid) ri++;
+    if ((pts[ri].eMv - pts[li].eMv).abs() >= minWidthMv) {
+      cE    = cand.eMv;
+      cIRaw = cand.iUa;
+      cIpc  = cand.iUa - (slope * cand.eMv + intercept);
     }
   }
 
