@@ -31,13 +31,40 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _importData() async {
     setState(() => _importing = true);
+    // Capture context-dependent references before any async gap so they remain
+    // valid even if this widget is deactivated while the file picker is open.
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final provider  = context.read<MeasurementProvider>();
+
+    void showErr(String message) {
+      showDialog<void>(
+        context: navigator.context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Text('Import Error',
+              style: TextStyle(color: Colors.white)),
+          content: Text(message,
+              style: const TextStyle(color: AppColors.textSecondary)),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    }
+
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: ['csv', 'xlsx'],
         withData: true, // ensure bytes are always loaded, regardless of platform
       );
-      if (result == null || result.files.isEmpty || !mounted) return;
+      if (result == null || result.files.isEmpty) return;
 
       final file = result.files.single;
       final Uint8List bytes;
@@ -46,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
       } else if (file.path != null) {
         bytes = await _HomeScreenState._readBytes(file.path!);
       } else {
-        _showError('Could not read file content.');
+        showErr('Could not read file content.');
         return;
       }
 
@@ -58,31 +85,29 @@ class _HomeScreenState extends State<HomeScreen> {
           .where((m) => m.abbreviation == project.modeName)
           .firstOrNull;
       if (mode == null) {
-        _showError('Unsupported technique: ${project.modeName}');
+        showErr('Unsupported technique: ${project.modeName}');
         return;
       }
 
-      if (!mounted) return;
-      context.read<MeasurementProvider>().importProject(project, mode);
+      provider.importProject(project, mode);
 
       final count = project.measurements.length;
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(
           content: Text(
               'Imported $count measurement${count == 1 ? '' : 's'}'),
         ),
       );
-      Navigator.push(
-        context,
+      navigator.push(
         MaterialPageRoute(
             builder: (_) => const AnalysisScreen(isImportedSession: true)),
       );
     } on CsvImportException catch (e) {
-      if (mounted) _showError(e.message);
+      showErr(e.message);
     } on XlsxImportException catch (e) {
-      if (mounted) _showError(e.message);
+      showErr(e.message);
     } catch (e) {
-      if (mounted) _showError('Import failed: $e');
+      showErr('Import failed: $e');
     } finally {
       if (mounted) setState(() => _importing = false);
     }
@@ -91,27 +116,6 @@ class _HomeScreenState extends State<HomeScreen> {
   static Future<Uint8List> _readBytes(String path) async {
     final dart_io.File file = dart_io.File(path);
     return file.readAsBytes();
-  }
-
-  void _showError(String message) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title: const Text('Import Error',
-            style: TextStyle(color: Colors.white)),
-        content: Text(message,
-            style: const TextStyle(color: AppColors.textSecondary)),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
