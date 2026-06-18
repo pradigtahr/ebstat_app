@@ -14,8 +14,8 @@ void main() {
     DeviceOrientation.landscapeLeft,
     DeviceOrientation.landscapeRight,
   ]);
-  // Hide status bar + nav bar; they reappear on swipe (edgeToEdge behaviour).
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  // Hide status bar + nav bar; they reappear briefly on swipe then auto-hide.
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
