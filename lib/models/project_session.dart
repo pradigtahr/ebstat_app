@@ -10,6 +10,13 @@ class MeasurementSession {
   final List<double?> sgPoints;
   final bool sgEnabled;
 
+  /// UI-only rename override for presentation. Never written to exports —
+  /// the canonical CSV/XLSX format always uses [displayName].
+  String? customName;
+
+  /// UI-only per-cycle rename overrides, keyed by cycle number.
+  final Map<int, String> customCycleNames = {};
+
   MeasurementSession({
     required this.mode,
     this.label = '',
@@ -20,6 +27,18 @@ class MeasurementSession {
     List<MeasurementPoint>? points,
   })  : points   = points ?? [],
         sgPoints = [];
+
+  /// Label shown in the UI: the rename override when set, else [displayName].
+  String get uiName =>
+      (customName != null && customName!.trim().isNotEmpty)
+          ? customName!
+          : displayName;
+
+  /// UI label for a cycle: the rename override when set, else "Cycle N".
+  String uiCycleName(int cycleNum) {
+    final n = customCycleNames[cycleNum];
+    return (n != null && n.trim().isNotEmpty) ? n : 'Cycle $cycleNum';
+  }
 
   Set<int> get cycles => {
         for (final p in points)

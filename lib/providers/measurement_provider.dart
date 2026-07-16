@@ -639,6 +639,27 @@ class MeasurementProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// UI-only rename (presentation). Empty/whitespace resets to the default
+  /// label. Does not touch [MeasurementSession.displayName] or exports.
+  void renameMeasurement(int index, String name) {
+    final session = _project?.measurements.elementAtOrNull(index);
+    if (session == null) return;
+    session.customName = name.trim().isEmpty ? null : name.trim();
+    notifyListeners();
+  }
+
+  /// UI-only cycle rename. Empty/whitespace resets to "Cycle N".
+  void renameCycle(int measurementIndex, int cycleNum, String name) {
+    final session = _project?.measurements.elementAtOrNull(measurementIndex);
+    if (session == null) return;
+    if (name.trim().isEmpty) {
+      session.customCycleNames.remove(cycleNum);
+    } else {
+      session.customCycleNames[cycleNum] = name.trim();
+    }
+    notifyListeners();
+  }
+
   void deleteCycle(int measurementIndex, int cycleNum) {
     final session = _project?.measurements[measurementIndex];
     if (session == null) return;

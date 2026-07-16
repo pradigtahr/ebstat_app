@@ -268,7 +268,7 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
     final session = provider.project?.measurements[index];
     if (session == null) return;
     final ok = await _confirmDialog(context,
-        'Delete "${session.displayName}"?', 'Remove this measurement? Cannot be undone.');
+        'Delete "${session.uiName}"?', 'Remove this measurement? Cannot be undone.');
     if (ok != true || !mounted) return;
     setState(() { _hiddenMeasurements.remove(index); _peaks.removeWhere((p) => p.cycleId.startsWith('$index')); _levels.removeWhere((l) => l.datasetId == '$index'); });
     provider.deleteMeasurement(index);
@@ -278,11 +278,65 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
       int mIdx, int cNum, MeasurementProvider provider) async {
     final session = provider.project?.measurements[mIdx];
     if (session == null) return;
-    final ok = await _confirmDialog(context, 'Delete Cycle $cNum?',
-        'Remove cycle $cNum from "${session.displayName}"?');
+    final ok = await _confirmDialog(context, 'Delete ${session.uiCycleName(cNum)}?',
+        'Remove cycle $cNum from "${session.uiName}"?');
     if (ok != true || !mounted) return;
     setState(() { _hiddenCycles.remove(_cycleKey(mIdx, cNum)); _peaks.removeWhere((p) => p.cycleId == '$mIdx:$cNum'); });
     provider.deleteCycle(mIdx, cNum);
+  }
+
+  // ── Rename (UI-only, presentation) ────────────────────────────────────────
+
+  Future<void> _renameMeas(int index, MeasurementProvider provider) async {
+    final session = provider.project?.measurements.elementAtOrNull(index);
+    if (session == null) return;
+    final name = await _renameDialog(session.uiName);
+    if (name == null || !mounted) return;
+    provider.renameMeasurement(index, name);
+  }
+
+  Future<void> _renameCycle(
+      int mIdx, int cNum, MeasurementProvider provider) async {
+    final session = provider.project?.measurements.elementAtOrNull(mIdx);
+    if (session == null) return;
+    final name = await _renameDialog(session.uiCycleName(cNum));
+    if (name == null || !mounted) return;
+    provider.renameCycle(mIdx, cNum, name);
+  }
+
+  /// Returns the new name, or null if cancelled. An empty string means
+  /// "reset to default label".
+  Future<String?> _renameDialog(String current) {
+    final ctrl = TextEditingController(text: current);
+    return showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Rename', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          style: const TextStyle(color: Colors.white),
+          decoration: _dlgInputDeco('Display name').copyWith(
+            helperText: 'Display only — exports keep the original name. '
+                'Clear the field to reset.',
+            helperMaxLines: 2,
+            helperStyle: const TextStyle(
+                color: AppColors.textSecondary, fontSize: 11),
+          ),
+          onSubmitted: (v) => Navigator.of(c).pop(v),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(c).pop(null),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.of(c).pop(ctrl.text),
+              child: const Text('Save')),
+        ],
+      ),
+    );
   }
 
   Future<bool?> _confirmDialog(BuildContext ctx, String title, String body) =>
@@ -420,6 +474,8 @@ class _AnalysisScreenState extends State<AnalysisScreen> {
                             onToggleCycle:      _toggleCycle,
                             onDeleteMeas:  (i)    => _confirmDeleteMeas(i, provider),
                             onDeleteCycle: (m, c) => _confirmDeleteCycle(m, c, provider),
+                            onRenameMeas:  (i)    => _renameMeas(i, provider),
+                            onRenameCycle: (m, c) => _renameCycle(m, c, provider),
                           ),
                         ),
                       )
@@ -778,8 +834,8 @@ class _OverlayChartState extends State<_OverlayChart> {
               if (meta.measurementIdx < 0) return LineTooltipItem('', const TextStyle());
               final session = project.measurements[meta.measurementIdx];
               final label   = meta.cycleNum != null
-                  ? '${session.displayName} · C${meta.cycleNum}'
-                  : session.displayName;
+                  ? '${session.uiName} · ${session.uiCycleName(meta.cycleNum!)}'
+                  : session.uiName;
               return LineTooltipItem(
                 '$label\n${s.x.toStringAsFixed(1)}\n${s.y.toStringAsFixed(3)} nA',
                 TextStyle(
@@ -944,6 +1000,8 @@ class _MeasurementTree extends StatelessWidget {
     required this.onToggleCycle,
     required this.onDeleteMeas,
     required this.onDeleteCycle,
+    required this.onRenameMeas,
+    required this.onRenameCycle,
   });
 
   final ProjectSession       project;
@@ -955,6 +1013,8 @@ class _MeasurementTree extends StatelessWidget {
   final void Function(int, int)  onToggleCycle;
   final void Function(int)       onDeleteMeas;
   final void Function(int, int)  onDeleteCycle;
+  final void Function(int)       onRenameMeas;
+  final void Function(int, int)  onRenameCycle;
 
   @override
   Widget build(BuildContext context) {
@@ -970,12 +1030,13 @@ class _MeasurementTree extends StatelessWidget {
 
           if (!isCv || session.cycles.isEmpty) {
             return _MeasRow(
-              label:    session.displayName,
+              label:    session.uiName,
               sublabel: session.label.isNotEmpty ? session.label : null,
               visible:  !isHidden,
               colorDot: kCycleColors[mIdx % kCycleColors.length],
               onToggle: () => onToggleMeas(mIdx),
               onDelete: () => onDeleteMeas(mIdx),
+              onRename: () => onRenameMeas(mIdx),
             );
           }
 
@@ -986,12 +1047,15 @@ class _MeasurementTree extends StatelessWidget {
               tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
               leading: Icon(Icons.expand_more,
                   color: isHidden ? AppColors.textSecondary : AppColors.accent2, size: 20),
-              title: Text(session.displayName,
-                  style: TextStyle(
-                    color:      isHidden ? AppColors.textSecondary : Colors.white,
-                    fontSize:   14,
-                    fontWeight: FontWeight.w600,
-                  )),
+              title: GestureDetector(
+                onLongPress: () => onRenameMeas(mIdx),
+                child: Text(session.uiName,
+                    style: TextStyle(
+                      color:      isHidden ? AppColors.textSecondary : Colors.white,
+                      fontSize:   14,
+                      fontWeight: FontWeight.w600,
+                    )),
+              ),
               subtitle: session.label.isNotEmpty
                   ? Text(session.label,
                       style: const TextStyle(color: AppColors.textSecondary, fontSize: 11))
@@ -1017,12 +1081,13 @@ class _MeasurementTree extends StatelessWidget {
                 final cycHidden = hiddenCycles.contains(key);
                 final color     = kCycleColors[(cNum - 1) % kCycleColors.length];
                 return _MeasRow(
-                  label:    'Cycle $cNum',
+                  label:    session.uiCycleName(cNum),
                   visible:  !cycHidden,
                   colorDot: color,
                   indent:   true,
                   onToggle: () => onToggleCycle(mIdx, cNum),
                   onDelete: () => onDeleteCycle(mIdx, cNum),
+                  onRename: () => onRenameCycle(mIdx, cNum),
                 );
               }).toList(),
             ),
@@ -1040,6 +1105,7 @@ class _MeasRow extends StatelessWidget {
     required this.colorDot,
     required this.onToggle,
     required this.onDelete,
+    this.onRename,
     this.sublabel,
     this.indent = false,
   });
@@ -1051,10 +1117,12 @@ class _MeasRow extends StatelessWidget {
   final bool    indent;
   final VoidCallback onToggle;
   final VoidCallback onDelete;
+  final VoidCallback? onRename;
 
   @override
   Widget build(BuildContext context) => ListTile(
         dense: true,
+        onLongPress: onRename,
         contentPadding: EdgeInsets.only(left: indent ? 32.0 : 12.0, right: 4),
         leading: Container(
           width: 10, height: 10,
